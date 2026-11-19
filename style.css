@@ -131,3 +131,34 @@ nav button.on { color: var(--accent); font-weight: 600; }
 .mt10 { margin-top: 10px; }
 .mt6 { margin-top: 6px; }
 .a.bad { color: var(--warn); }
+
+/* ---------- 表の編集 ---------- */
+.ed-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.ed-head select { flex: 1; font-size: 16px; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+.ed-add { flex-shrink: 0; border: 0; border-radius: 10px; padding: 11px 14px; font-size: 15px; font-weight: 600; background: var(--accent); color: #fff; }
+.form-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.field input[type=text], .field input[type=date], .field select, .field textarea {
+  width: 100%; font-size: 16px; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); font-family: inherit; }
+.field textarea { min-height: 72px; resize: vertical; }
+.field .ro { font-size: 15px; padding: 10px 0; color: var(--muted); }
+.field.wide { grid-column: 1 / -1; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 15px; padding: 8px 0; color: var(--fg); }
+.check input { width: 22px; height: 22px; accent-color: var(--accent); }
+.form-acts { display: flex; gap: 8px; margin-top: 14px; }
+.form-acts button { flex: 1; padding: 13px; font-size: 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); }
+.form-acts .primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.form-acts .danger { color: var(--warn); }
+.err { color: var(--warn); font-size: 13px; margin-top: 8px; }
+
+/* ---------- PC など広い画面 ---------- */
+@media (min-width: 900px) {
+  main { max-width: 980px; }
+  header { max-width: 980px; margin: 0 auto; }
+  .check { margin-top: 20px; }
+  .cats { grid-template-columns: repeat(7, 1fr); }
+  .form-grid { grid-template-columns: 1fr 1fr; }
+  .keypad button { height: 44px; }
+  nav { max-width: 980px; margin: 0 auto; border-left: 1px solid var(--line); border-right: 1px solid var(--line); border-radius: 14px 14px 0 0; }
+}
+.field label.check { display: flex; font-size: 15px; color: var(--fg); margin-bottom: 0; }
