@@ -558,6 +558,10 @@
       });
     }
 
+    if (mTab === 'edit') {
+      renderEditor(box);
+    }
+
     if (mTab === 'device') {
       const c = card('このiPhone');
       c.appendChild(el('p', 'note', 'この端末は「' + (cfg && cfg.n ? cfg.n : '') + '」として登録されています。データはGoogleスプレッドシートにあり、この端末とGitHubには保存されません。'));
@@ -566,6 +570,114 @@
         store.del(CFG_KEY); location.reload();
       }));
     }
+  }
+
+  /* ================= 表の編集 ================= */
+  let MASTERS = null;          // 編集できる表の一覧
+  let edKey = 'fixed';         // 選んでいる表
+  let edData = null;           // 選んでいる表の中身
+  let edRow = undefined;       // 編集中の行（null=新規、undefined=一覧表示）
+
+  async function renderEditor(box) {
+    if (!MASTERS) {
+      box.appendChild(el('div', 'loading', '読み込み中…'));
+      try { MASTERS = await api('listMasters'); } catch (e) { return fail(e); }
+    }
+    if (!edData || edData.key !== edKey) {
+      try { edData = await api('getMaster', edKey); } catch (e) { return fail(e); }
+    }
+    if (mTab !== 'edit') return;
+    clear(box);
+    const card = el('div', 'card'); box.appendChild(card);
+
+    const head = el('div', 'ed-head');
+    const sel = el('select');
+    MASTERS.forEach((m) => { const o = el('option', '', m.label); o.value = m.key; if (m.key === edKey) o.selected = true; sel.appendChild(o); });
+    sel.addEventListener('change', () => { edKey = sel.value; edData = null; edRow = undefined; renderEditor(clear(box)); });
+    head.appendChild(sel);
+    if (edData.canAdd && edRow === undefined) head.appendChild(btn('ed-add', '＋ 追加', () => { edRow = null; renderEditor(clear(box)); }));
+    card.appendChild(head);
+    card.appendChild(el('p', 'note', edData.desc));
+
+    if (edRow !== undefined) return renderForm(box, card);
+
+    const list = el('div'); card.appendChild(list);
+    if (!edData.rows.length) list.appendChild(el('div', 'empty', 'まだありません'));
+    edData.rows.forEach((r) => {
+      const row = el('div', 'row');
+      const l = el('div', 'l');
+      const f0 = edData.fields[0];
+      l.appendChild(el('div', 't1', String(r.values[f0.name])));
+      const sub = edData.fields.slice(1).filter((f) => f.type !== 'textarea' || f.name === 'text')
+        .map((f) => showValue(f, r.values[f.name])).filter(Boolean).slice(0, 5).join('・');
+      l.appendChild(el('div', 't2', sub));
+      const right = el('div', 'r');
+      right.appendChild(btn('sbtn', '編集', () => { edRow = r.row; renderEditor(clear(box)); }));
+      row.appendChild(l); row.appendChild(right);
+      list.appendChild(row);
+    });
+  }
+
+  function showValue(f, v) {
+    if (f.type === 'bool') return v ? f.label.replace(/（.*）/, '') : '';
+    if (v === '' || v === null || v === undefined) return '';
+    if (f.type === 'int') return f.label.replace(/（円）/, '') + ' ' + Number(v).toLocaleString('ja-JP') + (f.label.indexOf('円') >= 0 ? '円' : '');
+    const text = String(v).replace(/^'/, '');
+    return text.length > 40 ? text.slice(0, 40) + '…' : text;
+  }
+
+  function renderForm(box, card) {
+    const isNew = edRow === null;
+    const cur = isNew ? {} : (edData.rows.find((r) => r.row === edRow) || {}).values || {};
+    card.appendChild(el('span', 'label', isNew ? '新しく追加' : '編集'));
+    const grid = el('div', 'form-grid'); card.appendChild(grid);
+    const inputs = {};
+    edData.fields.forEach((f) => {
+      const wrap = el('div', 'field' + (f.type === 'textarea' ? ' wide' : ''));
+      let v = cur[f.name]; if (v === undefined || v === null) v = '';
+      if (typeof v === 'string') v = v.replace(/^'/, '');
+      if (f.type === 'bool') {
+        const lab = el('label', 'check');
+        const cb = el('input'); cb.type = 'checkbox'; cb.checked = isNew ? ['inBudget', 'reserve', 'enabled'].indexOf(f.name) >= 0 : v === true;
+        lab.appendChild(cb); lab.appendChild(document.createTextNode(f.label));
+        wrap.appendChild(lab); inputs[f.name] = () => cb.checked;
+      } else {
+        wrap.appendChild(el('label', '', f.label + (f.required ? '（必須）' : '')));
+        let inp;
+        if (f.type === 'readonly') { inp = el('div', 'ro', String(v) || '—'); inputs[f.name] = () => null; }
+        else if (f.type === 'textarea') { inp = el('textarea'); inp.value = v; }
+        else if (f.type === 'select') {
+          inp = el('select');
+          ['', ...f.options].forEach((o) => { const op = el('option', '', o || '（選ぶ）'); op.value = o; if (o === v) op.selected = true; inp.appendChild(op); });
+        } else {
+          inp = el('input'); inp.type = f.type === 'date' ? 'date' : 'text'; inp.value = v; inp.autocomplete = 'off';
+          if (f.type === 'int' || f.type === 'day') inp.inputMode = 'numeric';
+          if (f.type === 'month') inp.placeholder = '2029/08';
+          if (f.type === 'months') inp.placeholder = '6,12';
+          if (f.type === 'close') inp.placeholder = '5 または 末';
+        }
+        wrap.appendChild(inp);
+        if (!inputs[f.name]) inputs[f.name] = () => inp.value;
+      }
+      grid.appendChild(wrap);
+    });
+    const err = el('div', 'err'); card.appendChild(err);
+    const acts = el('div', 'form-acts'); card.appendChild(acts);
+    acts.appendChild(btn('', 'キャンセル', () => { edRow = undefined; renderEditor(clear(box)); }));
+    if (!isNew && edData.canDelete) {
+      acts.appendChild(btn('danger', '削除', async () => {
+        const name = cur[edData.fields[0].name];
+        if (!confirm('「' + name + '」を削除しますか？')) return;
+        try { edData = await api('deleteMaster', edKey, edRow, name); edRow = undefined; renderEditor(clear(box)); toast('削除しました'); }
+        catch (e) { err.textContent = e.message; }
+      }));
+    }
+    acts.appendChild(btn('primary', '保存', async () => {
+      const values = {};
+      edData.fields.forEach((f) => { values[f.name] = inputs[f.name](); });
+      try { edData = await api('saveMaster', edKey, isNew ? null : edRow, values); edRow = undefined; renderEditor(clear(box)); toast('保存しました'); }
+      catch (e) { err.textContent = e.message; }
+    }));
   }
 
   /* ================= 起動 ================= */
