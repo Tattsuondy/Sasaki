@@ -44,7 +44,28 @@
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 
   /* ---------- API ---------- */
+  // 画面を開いたときに待たないよう、読み込んだ内容をこの画面を開いている間だけ覚えておく。
+  // 端末（localStorage など）には保存しない。アプリを閉じると消える。
+  const MEM = {};
+  const MEM_AT = {};           // 読み込んだ時刻。30秒以内なら読み直さない
+  const FRESH_MS = 30000;
+  const READS = ['init', 'getMonth', 'getFixed', 'getSchedule', 'getManage', 'listMasters', 'getMaster', 'bundle'];
+  let busyN = 0;
+  function busy(d) {
+    busyN = Math.max(0, busyN + d);
+    const b = $('#busy'); if (b) b.classList.toggle('on', busyN > 0);
+  }
   async function api(action, ...args) {
+    busy(1);
+    try { return await apiRaw(action, args); }
+    finally { busy(-1); }
+  }
+  async function apiRaw(action, args) {
+    if (READS.indexOf(action) < 0) {
+      // 書き込んだら覚えていた内容は古くなるので捨てて、あとで読み直す
+      Object.keys(MEM).forEach((k) => delete MEM[k]);
+      clearTimeout(apiRaw.t); apiRaw.t = setTimeout(prefetch, 1500);
+    }
     const res = await fetch(cfg.u, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -55,7 +76,40 @@
       if (j.auth === false) { showSetup('この端末の登録が無効になっています。新しい登録リンクを開いてください。'); }
       throw new Error(j.error || 'エラーが発生しました');
     }
+    if (READS.indexOf(action) >= 0 && action !== 'bundle') { MEM[action + '|' + JSON.stringify(args)] = j.data; MEM_AT[action + '|' + JSON.stringify(args)] = Date.now(); }
     return j.data;
+  }
+
+  /** 覚えている内容があればすぐ表示し、裏で最新を取りにいく。中身が変わっていたら描き直す */
+  async function load(action, args, render, viewId) {
+    const k = action + '|' + JSON.stringify(args);
+    const had = MEM[k];
+    if (had) render(had);
+    if (had && Date.now() - (MEM_AT[k] || 0) < FRESH_MS) return;
+    try {
+      const d = await api(action, ...args);
+      if (had && JSON.stringify(had) === JSON.stringify(d)) return;
+      const v = viewId && document.getElementById(viewId);
+      if (had && v && v.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;   // 入力中は邪魔しない
+      render(d);
+    } catch (e) { if (!had) fail(e); }
+  }
+
+  /** 起動後に、ほかの画面の内容をまとめて1回で読んでおく */
+  async function prefetch() {
+    if (!cfg || !curMonth) return;
+    try {
+      const d = await api('bundle', curMonth);
+      MEM['getMonth|' + JSON.stringify([curMonth])] = d.month;
+      MEM['getFixed|' + JSON.stringify([curMonth])] = d.fixed;
+      MEM['getSchedule|[]'] = d.schedule;
+      MEM['getManage|[]'] = d.manage;
+      MEM['listMasters|[]'] = d.masters;
+      MEM['getMaster|' + JSON.stringify(['fixed'])] = d.master;
+      const now = Date.now();
+      ['getMonth|' + JSON.stringify([curMonth]), 'getFixed|' + JSON.stringify([curMonth]), 'getSchedule|[]', 'getManage|[]']
+        .forEach((k) => { MEM_AT[k] = now; });
+    } catch (e) { /* 各画面を開いたときに読む */ }
   }
 
   /* ---------- トースト ---------- */
@@ -217,7 +271,7 @@
   async function loadMonth(ym) {
     curMonth = ym;
     $('#sum-label').textContent = monthLabel(ym);
-    try { renderMonth(await api('getMonth', ym)); } catch (e) { fail(e); }
+    await load('getMonth', [ym], (d) => { if (curMonth === ym) renderMonth(d); }, 'v-sum');
   }
 
   function bar(name, total, budget, maxv) {
@@ -305,7 +359,7 @@
   const LV = { '高': 'high', '中': 'mid', '低': 'low' };
 
   async function loadPlan() {
-    try { renderPlan(await api('getSchedule')); } catch (e) { fail(e); }
+    await load('getSchedule', [], renderPlan, 'v-plan');
   }
 
   function renderPlan(d) {
@@ -371,7 +425,7 @@
   async function loadFixed(ym) {
     curMonth = ym;
     $('#fx-label').textContent = monthLabel(ym);
-    try { renderFixed(await api('getFixed', ym)); } catch (e) { fail(e); }
+    await load('getFixed', [ym], (d) => { if (curMonth === ym) renderFixed(d); }, 'v-fixed');
   }
 
   function renderFixed(d) {
@@ -421,7 +475,7 @@
   }));
 
   async function loadManage() {
-    try { renderManage(await api('getManage')); } catch (e) { fail(e); }
+    await load('getManage', [], renderManage, 'v-manage');
   }
 
   const schedText = (a) => (a.every === 0 ? a.startYear + '年 ' : (a.every > 1 ? a.every + '年ごと・' : '毎年 ')) + a.months.join('・') + '月';
@@ -581,10 +635,10 @@
   async function renderEditor(box) {
     if (!MASTERS) {
       box.appendChild(el('div', 'loading', '読み込み中…'));
-      try { MASTERS = await api('listMasters'); } catch (e) { return fail(e); }
+      try { MASTERS = MEM['listMasters|[]'] || await api('listMasters'); } catch (e) { return fail(e); }
     }
     if (!edData || edData.key !== edKey) {
-      try { edData = await api('getMaster', edKey); } catch (e) { return fail(e); }
+      try { edData = MEM['getMaster|' + JSON.stringify([edKey])] || await api('getMaster', edKey); } catch (e) { return fail(e); }
     }
     if (mTab !== 'edit') return;
     clear(box);
@@ -692,6 +746,7 @@
       renderDates(); renderAmount(); renderKeypad(); renderFreq(); renderCats(); renderMethods(); renderMemoSuggest(); renderTodayStat();
       $('#loading').classList.add('hidden');
       show('input');
+      prefetch();
     } catch (e) {
       $('#loading').textContent = '起動できませんでした：' + (e && e.message ? e.message : e);
     }
