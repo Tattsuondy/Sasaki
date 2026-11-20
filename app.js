@@ -511,16 +511,18 @@
     if (mTab === 'accounts') {
       const c = card('口座ごとの残高（タップで更新）');
       c.appendChild(el('div', 'big', yen(d.accounts.total)));
-      c.appendChild(el('p', 'note', '入力済みの口座の合計'));
+      c.appendChild(el('p', 'note', '入力済みの口座の合計。残高を入れたあとに、その口座で払った支払いを引いています（カード払いは引き落とし日に予定画面で引きます）。'))
       const c2 = card();
       d.accounts.accounts.forEach((a) => {
         const row = el('div', 'row');
         const l = el('div', 'l');
         l.appendChild(el('div', 't1', a.name));
-        l.appendChild(el('div', 't2', [a.role, a.updated ? a.updated + ' ' + a.user : '未入力'].filter(Boolean).join('・')));
+        l.appendChild(el('div', 't2', [a.role, a.updated ? a.updated + ' ' + a.user + ' に ' + yen(a.balance) : (a.balance === null ? '未入力' : '')].filter(Boolean).join('・')));
+        if (a.spentCount) l.appendChild(el('div', 't2', 'そのあとの支払い ' + a.spentCount + '件 −' + yen(a.spent) + ' を引いた見込み'));
+        if (a.noBase) l.appendChild(el('div', 't2', '※ 残高を入れた日時がないため、支払いを引いていません。ボタンから残高を入れ直してください'));
         const r = el('div', 'r');
-        r.appendChild(btn('sbtn on', a.balance === null ? '残高を入れる' : yen(a.balance), async () => {
-          const v = prompt(a.name + ' の今の残高', a.balance === null ? '' : a.balance);
+        r.appendChild(btn('sbtn on', a.current === null ? '残高を入れる' : yen(a.current), async () => {
+          const v = prompt(a.name + ' の今の残高（通帳やアプリの金額。入れると、ここから数え直します）', a.current === null ? '' : a.current);
           if (v === null || v.trim() === '') return;
           try { renderManage(await api('saveBalance', a.name, v.replace(/[^0-9-]/g, ''))); toast('更新しました'); } catch (e) { fail(e); }
         }));
