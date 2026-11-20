@@ -56,10 +56,16 @@
     busyN = Math.max(0, busyN + d);
     const b = $('#busy'); if (b) b.classList.toggle('on', busyN > 0);
   }
+  const TIMES = [];             // 最近の通信にかかった時間（「この端末」に表示。遅いときの原因調べ用）
   async function api(action, ...args) {
     busy(1);
+    const t0 = performance.now();
     try { return await apiRaw(action, args); }
-    finally { busy(-1); }
+    finally {
+      busy(-1);
+      TIMES.unshift({ a: action, ms: Math.round(performance.now() - t0), at: new Date().toLocaleTimeString('ja-JP') });
+      TIMES.length = Math.min(TIMES.length, 10);
+    }
   }
   async function apiRaw(action, args) {
     if (READS.indexOf(action) < 0) {
@@ -640,6 +646,14 @@
         if (!confirm('このiPhoneの登録を解除しますか？もう一度使うには登録リンクが必要です。')) return;
         store.del(CFG_KEY); location.reload();
       }));
+      const t = card('通信にかかった時間（最近10回）');
+      if (!TIMES.length) t.appendChild(el('div', 'empty', 'まだありません'));
+      TIMES.forEach((x) => {
+        const row = el('div', 'row');
+        row.appendChild(el('div', 'l', x.at + '　' + x.a));
+        row.appendChild(el('div', 'r', (x.ms / 1000).toFixed(1) + '秒'));
+        t.appendChild(row);
+      });
     }
   }
 
@@ -755,6 +769,10 @@
   async function boot() {
     if (!cfg) return showSetup();
     $('#app').classList.remove('hidden');
+    // 入力画面の準備と、ほかの画面の先読みを同時に始める（順番に待たない）
+    const now = new Date();
+    curMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    const pre = prefetch();
     try {
       INIT = await api('init');
       $('#who').textContent = INIT.user;
@@ -763,7 +781,7 @@
       renderDates(); renderAmount(); renderKeypad(); renderFreq(); renderCats(); renderMethods(); renderMemoSuggest(); renderTodayStat();
       $('#loading').classList.add('hidden');
       show('input');
-      prefetch();
+      if (INIT.month !== curMonth) { curMonth = INIT.month; prefetch(); } else { pre.catch(() => {}); }
     } catch (e) {
       $('#loading').textContent = '起動できませんでした：' + (e && e.message ? e.message : e);
     }
