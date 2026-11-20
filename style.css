@@ -168,3 +168,4 @@ nav button.on { color: var(--accent); font-weight: 600; }
 .busy.on { opacity: 1; }
 .busy::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; background: var(--accent); animation: blink 1s infinite; vertical-align: 1px; }
 @keyframes blink { 50% { opacity: .2; } }
+.sbtn:disabled { opacity: .6; }
