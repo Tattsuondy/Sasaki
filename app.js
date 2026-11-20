@@ -51,6 +51,7 @@
   const FRESH_MS = 30000;
   const READS = ['init', 'getMonth', 'getFixed', 'getSchedule', 'getManage', 'listMasters', 'getMaster', 'bundle'];
   let busyN = 0;
+  let writeSeq = 0;            // 書き込みの回数。読み込み中に書き込みがあったら、その読み込み結果は古いので使わない
   function busy(d) {
     busyN = Math.max(0, busyN + d);
     const b = $('#busy'); if (b) b.classList.toggle('on', busyN > 0);
@@ -62,6 +63,7 @@
   }
   async function apiRaw(action, args) {
     if (READS.indexOf(action) < 0) {
+      writeSeq++;
       // 書き込んだら覚えていた内容は古くなるので捨てて、あとで読み直す
       Object.keys(MEM).forEach((k) => delete MEM[k]);
       clearTimeout(apiRaw.t); apiRaw.t = setTimeout(prefetch, 1500);
@@ -86,8 +88,10 @@
     const had = MEM[k];
     if (had) render(had);
     if (had && Date.now() - (MEM_AT[k] || 0) < FRESH_MS) return;
+    const seq = writeSeq;
     try {
       const d = await api(action, ...args);
+      if (seq !== writeSeq) return;   // 途中で保存した。保存の結果のほうが新しい
       if (had && JSON.stringify(had) === JSON.stringify(d)) return;
       const v = viewId && document.getElementById(viewId);
       if (had && v && v.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;   // 入力中は邪魔しない
@@ -456,9 +460,22 @@
         try { renderFixed(await api('saveFixed', d.month, it.name, v.replace(/[^0-9]/g, ''), it.paid)); } catch (e) { fail(e); }
       }));
       const acts = el('div', 'acts');
-      acts.appendChild(btn('sbtn' + (it.paid ? ' on' : ''), it.paid ? '✓ 支払済' : '支払済にする', async () => {
-        try { renderFixed(await api('saveFixed', d.month, it.name, it.actual === null ? '' : it.actual, !it.paid)); } catch (e) { fail(e); }
-      }));
+      const pb = btn('sbtn' + (it.paid ? ' on' : ''), it.paid ? '✓ 支払済' : '支払済にする', async () => {
+        if (pb.disabled) return;
+        // 押したらすぐ見た目を変える（通信の結果を待たない）
+        const next = !it.paid;
+        pb.disabled = true;
+        pb.classList.toggle('on', next);
+        pb.textContent = next ? '✓ 支払済' : '支払済にする';
+        try {
+          renderFixed(await api('saveFixed', d.month, it.name, it.actual === null ? '' : it.actual, next));
+          toast(next ? '支払済にしました' : '未払いに戻しました');
+        } catch (e) {
+          pb.classList.toggle('on', it.paid); pb.textContent = it.paid ? '✓ 支払済' : '支払済にする'; pb.disabled = false;
+          fail(e);
+        }
+      });
+      acts.appendChild(pb);
       r.appendChild(acts);
       row.appendChild(l); row.appendChild(r);
       list.appendChild(row);
