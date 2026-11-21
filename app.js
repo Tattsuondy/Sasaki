@@ -200,6 +200,7 @@
         const res = await post({ action: 'sync', rev: S.forceFull ? 0 : S.rev, ops: sending }, keepalive);
         if (res.data) S.forceFull = false;
         S.user = res.user || S.user;
+        S.book = res.book || null;
         if (res.data) S.base = res.data;
         else if (res.applied && S.base) {
           res.applied.forEach((a) => {
@@ -1334,6 +1335,13 @@
     main.appendChild(card('スプレッドシートの初期設定がまだです',
       h('p', null, '口座や分類がまだ1件もありません。スプレッドシートを開いて、メニュー「家計簿 > 初期設定（旧データの引き継ぎ）」を実行してください。'),
       h('p', { class: 'note' }, 'メニューが出ないときは、スプレッドシートを開き直してください。実行が終わったら、下のボタンで読み直します。'),
+      S.book ? h('div', { class: 'diag' }, h('div', { class: 'flabel' }, 'このアプリがつながっているスプレッドシート'),
+        S.book.error ? h('p', { class: 'err' }, S.book.error) : [
+          h('div', { class: 'bd' }, h('span', null, '名前'), h('span', null, S.book.name + '（ID ' + S.book.id + '…）')),
+          h('div', { class: 'bd' }, h('span', null, '「口座・カード」シート'), h('span', null, S.book.walletRows === null ? 'ありません' : S.book.walletRows + '行')),
+          h('div', { class: 'bd' }, h('span', null, '初期設定'), h('span', null, S.book.setup === 'done' ? '済み' : 'まだ')),
+          S.book.missing.length ? h('p', { class: 'note warn' }, 'ない表：' + S.book.missing.join('、')) : null,
+          h('p', { class: 'note' }, '名前やIDが、初期設定を実行したスプレッドシートと違う場合は、ウェブアプリが別のスクリプトからデプロイされています。')]) : null,
       h('button', { type: 'button', class: 'save-btn', onclick: async () => { S.forceFull = true; await flush(); if (S.inflight) await S.inflight; toast(S.error ? '読み込めませんでした：' + S.error : '読み直しました'); render(true); } }, '読み直す')));
   }
 
