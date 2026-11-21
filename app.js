@@ -7,6 +7,7 @@
 (() => {
   'use strict';
   const E = window.Engine;
+  const APP_VERSION = 'v2-2026-11-21c';
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -201,6 +202,8 @@
         if (res.data) S.forceFull = false;
         S.user = res.user || S.user;
         S.book = res.book || null;
+        S.code = res.code || '（古い版）';
+        S.got = res.data ? Object.keys(res.data).map((k) => k + ':' + res.data[k].length).join(' ') : (res.same ? '変更なし' : '差分のみ');
         if (res.data) S.base = res.data;
         else if (res.applied && S.base) {
           res.applied.forEach((a) => {
@@ -1335,6 +1338,11 @@
     main.appendChild(card('スプレッドシートの初期設定がまだです',
       h('p', null, '口座や分類がまだ1件もありません。スプレッドシートを開いて、メニュー「家計簿 > 初期設定（旧データの引き継ぎ）」を実行してください。'),
       h('p', { class: 'note' }, 'メニューが出ないときは、スプレッドシートを開き直してください。実行が終わったら、下のボタンで読み直します。'),
+      h('div', { class: 'diag' }, h('div', { class: 'flabel' }, '原因調べ用の情報'),
+        h('div', { class: 'bd' }, h('span', null, '画面の版'), h('span', null, APP_VERSION)),
+        h('div', { class: 'bd' }, h('span', null, 'GASの版'), h('span', null, S.code || '—')),
+        h('div', { class: 'bd' }, h('span', null, '受け取ったデータ'), h('span', null, S.got || '—')),
+        h('div', { class: 'bd' }, h('span', null, '前回の通信'), h('span', null, S.error || '成功'))),
       S.book ? h('div', { class: 'diag' }, h('div', { class: 'flabel' }, 'このアプリがつながっているスプレッドシート'),
         S.book.error ? h('p', { class: 'err' }, S.book.error) : [
           h('div', { class: 'bd' }, h('span', null, '名前'), h('span', null, S.book.name + '（ID ' + S.book.id + '…）')),
