@@ -1,122 +1,40 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://script.google.com https://script.googleusercontent.com; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
-<meta name="referrer" content="no-referrer">
-<meta name="robots" content="noindex, nofollow">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="家計簿">
-<meta name="theme-color" content="#f5f4f0" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#141412" media="(prefers-color-scheme: dark)">
-<title>家計簿</title>
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icon-180.png">
-<link rel="icon" type="image/png" href="icon-180.png">
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://script.google.com https://script.googleusercontent.com; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121413" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="家計簿">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="style.css">
+  <title>家計簿</title>
 </head>
 <body>
-
-<!-- 初回：端末の登録 -->
-<section id="setup" class="hidden">
-  <main class="setup">
-    <h2>家計簿を使う準備</h2>
-    <p id="setup-msg">この端末はまだ登録されていません。</p>
-    <p class="note">スクリプトで発行した「端末登録リンク」を下に貼り付けて、「登録する」を押してください。リンクはこの端末の中だけに保存され、どこにも送られません。</p>
-    <input id="setup-link" type="text" placeholder="https://…#setup=…" autocomplete="off" autocapitalize="off" spellcheck="false">
-    <button class="save" id="setup-go" type="button">登録する</button>
-  </main>
-</section>
-
-<div id="app" class="hidden">
-  <header>
-    <h1>家計簿</h1>
-    <span class="busy" id="busy">更新中</span>
-    <span class="who" id="who"></span>
-  </header>
-
-  <main>
-    <div id="loading" class="loading">読み込み中…</div>
-
-    <!-- 入力 -->
-    <section id="v-input" class="hidden">
-      <div class="dates" id="dates"></div>
-      <div class="card">
-        <div class="amount"><span class="n zero" id="amount">0</span><span class="u">円</span></div>
-        <div class="keypad" id="keypad"></div>
-      </div>
-      <div class="today-stat" id="today-stat"></div>
-      <div class="card" id="freq-card">
-        <span class="label">よく使う（タップで分類・支払い方法・メモを入力）</span>
-        <div class="chips" id="freq"></div>
-      </div>
-      <div class="card">
-        <span class="label">分類</span>
-        <div class="cats" id="cats"></div>
-      </div>
-      <div class="card">
-        <span class="label">支払い方法</span>
-        <div class="chips" id="methods"></div>
-        <span class="label mt10">メモ</span>
-        <input id="memo" class="memo" type="text" maxlength="200" placeholder="お店や内容（任意）" autocomplete="off">
-        <div class="chips mt6" id="memo-suggest"></div>
-      </div>
-      <button class="save" id="save" type="button">登録する</button>
-    </section>
-
-    <!-- 集計 -->
-    <section id="v-sum" class="hidden">
-      <div class="monthbar"><button id="sum-prev" type="button" aria-label="前の月">‹</button><strong id="sum-label"></strong><button id="sum-next" type="button" aria-label="次の月">›</button></div>
-      <div class="card" id="overview"></div>
-      <div class="card"><span class="label" id="tatekae"></span></div>
-      <div class="card"><span class="label">分類別</span><div id="bars"></div></div>
-      <div class="card"><span class="label">明細</span><div id="list"></div></div>
-    </section>
-
-    <!-- 予定 -->
-    <section id="v-plan" class="hidden">
-      <div class="card"><span class="label">気をつけること</span><div id="alerts"></div></div>
-      <div class="card"><span class="label">口座の残高の見通し（60日間でいちばん少なくなる額）</span><div id="projections"></div></div>
-      <div class="card"><span class="label">これからの予定（60日間）</span><div id="timeline"></div></div>
-    </section>
-
-    <!-- 固定費 -->
-    <section id="v-fixed" class="hidden">
-      <div class="monthbar"><button id="fx-prev" type="button" aria-label="前の月">‹</button><strong id="fx-label"></strong><button id="fx-next" type="button" aria-label="次の月">›</button></div>
-      <div class="card" id="fx-summary"></div>
-      <div class="card"><div id="fx-list"></div></div>
-    </section>
-
-    <!-- 管理 -->
-    <section id="v-manage" class="hidden">
-      <div class="seg" id="seg">
-        <button type="button" data-tab="accounts" class="on">口座</button>
-        <button type="button" data-tab="bonus">ボーナス</button>
-        <button type="button" data-tab="annual">年間の支払い</button>
-        <button type="button" data-tab="cards">カード</button>
-        <button type="button" data-tab="deadlines">期限</button>
-        <button type="button" data-tab="incomes">収入</button>
-        <button type="button" data-tab="edit">表の編集</button>
-        <button type="button" data-tab="device">この端末</button>
-      </div>
-      <div id="m-body"></div>
-      <p class="note" id="m-foot">項目の追加や変更は「表の編集」から行えます。</p>
-    </section>
-  </main>
-
-  <nav>
-    <button id="t-input" type="button"><span class="i">✏️</span>入力</button>
-    <button id="t-sum" type="button"><span class="i">📊</span>集計</button>
-    <button id="t-plan" type="button"><span class="i">📅</span>予定</button>
-    <button id="t-fixed" type="button"><span class="i">🏠</span>固定費</button>
-    <button id="t-manage" type="button"><span class="i">🗂</span>管理</button>
-  </nav>
-</div>
-
-<div class="toast" id="toast" role="status"></div>
-<script src="app.js"></script>
+  <div id="root">
+    <header id="top">
+      <h1 id="title">家計簿</h1>
+      <button type="button" id="status" class="status" aria-live="polite"><span class="dot"></span><span id="status-text">読み込み中</span></button>
+    </header>
+    <main id="main" tabindex="-1"><div class="boot">読み込み中…</div></main>
+    <nav id="nav" class="hidden" aria-label="画面の切り替え">
+      <button type="button" data-tab="home"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg><span>ホーム</span></button>
+      <button type="button" data-tab="input"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg><span>入力</span></button>
+      <button type="button" data-tab="list"><svg viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg><span>明細</span></button>
+      <button type="button" data-tab="plan"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span>予定</span></button>
+      <button type="button" data-tab="manage"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>管理</span></button>
+    </nav>
+  </div>
+  <div id="layer"></div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
