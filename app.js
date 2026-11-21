@@ -197,7 +197,8 @@
     setStatus();
     S.inflight = (async () => {
       try {
-        const res = await post({ action: 'sync', rev: S.rev, ops: sending }, keepalive);
+        const res = await post({ action: 'sync', rev: S.forceFull ? 0 : S.rev, ops: sending }, keepalive);
+        if (res.data) S.forceFull = false;
         S.user = res.user || S.user;
         if (res.data) S.base = res.data;
         else if (res.applied && S.base) {
@@ -1307,7 +1308,7 @@
       h('div', { class: 'bd' }, h('span', null, 'データの版'), h('span', null, String(S.rev))),
       S.error ? h('p', { class: 'err' }, '前回の通信：' + S.error) : null,
       h('div', { class: 'btns' }, h('button', { type: 'button', class: 'primary', onclick: async () => { await flush(); toast(S.error ? '送れませんでした：' + S.error : '最新にしました'); refresh(); } }, '今すぐ同期'),
-        h('button', { type: 'button', onclick: async () => { S.rev = 0; await flush(); toast(S.error ? '読み直せませんでした' : 'スプレッドシートから読み直しました'); refresh(); } }, '全部読み直す'))));
+        h('button', { type: 'button', onclick: async () => { S.forceFull = true; await flush(); if (S.inflight) await S.inflight; toast(S.error ? '読み直せませんでした' : 'スプレッドシートから読み直しました'); refresh(); } }, '全部読み直す'))));
     main.appendChild(card('しくみ', h('p', { class: 'note' },
       '入力・変更は、押した瞬間にこの端末に保存され（暗号化）、画面にすぐ出ます。同時に裏でスプレッドシートへ送ります。電波が悪くても失われず、つながったときに自動で送ります。右上の表示で状態がわかります：「保存済み」＝スプレッドシートまで保存済み、「保存待ち」「保存中」＝送信中、「未送信」＝送れていない（自動で再送します）。')));
     if (S.ops.length) main.appendChild(card('まだ送っていない変更', S.ops.map((o) => row({ t1: (o.t === 'del' ? '削除：' : '保存：') + E.SCHEMA[o.table].label, t2: o.t === 'del' ? o.rid : (o.row.name || o.row.memo || o.row.item || o.row.id) }))));
@@ -1333,7 +1334,7 @@
     main.appendChild(card('スプレッドシートの初期設定がまだです',
       h('p', null, '口座や分類がまだ1件もありません。スプレッドシートを開いて、メニュー「家計簿 > 初期設定（旧データの引き継ぎ）」を実行してください。'),
       h('p', { class: 'note' }, 'メニューが出ないときは、スプレッドシートを開き直してください。実行が終わったら、下のボタンで読み直します。'),
-      h('button', { type: 'button', class: 'save-btn', onclick: async () => { S.rev = 0; await flush(); toast(S.error ? '読み込めませんでした：' + S.error : '読み直しました'); render(true); } }, '読み直す')));
+      h('button', { type: 'button', class: 'save-btn', onclick: async () => { S.forceFull = true; await flush(); if (S.inflight) await S.inflight; toast(S.error ? '読み込めませんでした：' + S.error : '読み直しました'); render(true); } }, '読み直す')));
   }
 
   const TABS = { home: homePage, input: inputPage, list: listPage, plan: planPage, manage: managePage };
