@@ -157,6 +157,20 @@ var Engine = (function () {
         { k: 'lineId', label: 'LINEのID', type: 'lineId' },
         { k: 'enabled', label: '有効', type: 'bool', def: true }
       ]
+    },
+    todos: {
+      sheet: 'やること', label: 'やることリスト', prefix: 'k',
+      fields: [
+        { k: 'id', type: 'id' },
+        { k: 'title', label: 'やること', type: 'text', req: true },
+        { k: 'due', label: '期限', type: 'date' },
+        { k: 'group', label: 'まとまり（例 12月4日まで・口座の設定）', type: 'text' },
+        { k: 'who', label: '担当', type: 'select', opts: ['夫', '妻', '二人'] },
+        { k: 'done', label: '済み', type: 'bool', def: false },
+        { k: 'doneAt', label: '済ませた日時', type: 'datetime', ro: true },
+        { k: 'order', label: '並び順', type: 'int', def: 50 },
+        { k: 'memo', label: 'メモ', type: 'longtext' }
+      ]
     }
   };
   const TABLES = Object.keys(SCHEMA);
@@ -310,9 +324,15 @@ var Engine = (function () {
     m.plans = (data.plans || []).filter((p) => p.active !== false);
     m.plansAll = data.plans || [];
     m.deadlines = data.deadlines || [];
+    m.todos = (data.todos || []).slice().sort(todoOrder);
     m.bonuses = (data.bonuses || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
     m.allocs = (data.allocs || []).slice().sort(byOrder);
     return m;
+  }
+
+  /** やることの並び：済んでいないもの → 期限が近い順（期限なしは後ろ）→ 並び順 */
+  function todoOrder(a, b) {
+    return (a.done === true) - (b.done === true) || String(a.due || '9999').localeCompare(String(b.due || '9999')) || (Number(a.order) || 0) - (Number(b.order) || 0);
   }
 
   /* ================= カード ================= */
@@ -655,6 +675,12 @@ var Engine = (function () {
       if (c.group !== '生活費' || !c.budget) return;
       if (c.total > c.budget) add('中', 'budget_over', c.name + 'が今月の予算を ' + yen(c.total - c.budget) + ' 超えています。', {}, { category: c.id, appOnly: true });
       else if (c.total >= c.budget * 0.9 && s.dayRatio < 0.9) add('低', 'budget_near', c.name + 'が予算の ' + Math.round(c.total / c.budget * 100) + '% に達しました（残り ' + yen(c.budget - c.total) + '）。', {}, { category: c.id, appOnly: true });
+    });
+    m.todos.forEach((t) => {
+      if (t.done || !t.due) return;
+      const left = diffDays(m.today, t.due);
+      if (left <= 3) add(left < 0 ? '高' : '中', 'todo', 'やること：' + t.title + (left < 0 ? '（期限 ' + md(t.due) + ' を過ぎています）' : '（' + (left === 0 ? '今日' : 'あと' + left + '日') + '・' + md(t.due) + '）'),
+        { 項目: t.title, 期限日: md(t.due), 日数: String(left), メモ: t.memo || '' }, { todo: t.id, who: t.who === '二人' ? 'グループ' : t.who, appOnly: true });
     });
     const order = { '高': 0, '中': 1, '低': 2 };
     return out.sort((a, b) => order[a.level] - order[b.level]);
