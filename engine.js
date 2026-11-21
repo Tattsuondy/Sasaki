@@ -169,6 +169,7 @@ var Engine = (function () {
     const out = {};
     sc.fields.forEach((f) => { out[f.k] = cleanField(f, row[f.k], row); });
     if (table === 'tx') checkTx(out);
+    if (table === 'plans' && out.kind === '振替' && (!out.wallet || !out.to || out.wallet === out.to)) throw new Error('振替の予定は、移す元と移す先を別々に選んでください。');
     if (table === 'wallets' && out.kind === 'カード' && !out.payFrom) { /* 引き落とし口座は後から入れてもよい */ }
     return out;
   }
