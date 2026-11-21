@@ -7,7 +7,7 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-21c';
+  const APP_VERSION = 'v2-2026-11-21d';
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -1112,7 +1112,10 @@
       clear(form);
       if (p.table === 'wallets' && v.kind !== 'カード') form.appendChild(h('p', { class: 'note' }, '開始残高は「今」の残高です。入れた日時より後の記録で、残高を計算します。'));
       if (p.table === 'tx' && v.ref) form.appendChild(h('p', { class: 'note' }, '予定（固定費・年間・ボーナス配分など）から記録したものです。削除すると、予定は「未記録」に戻ります。'));
-      sc.fields.forEach((f) => {
+      // 振替の予定は「移す元」のすぐ下に「移す先」を出す
+      const fields = sc.fields.slice();
+      if (p.table === 'plans') { const ti = fields.findIndex((f) => f.k === 'to'); const tf = fields.splice(ti, 1)[0]; fields.splice(fields.findIndex((f) => f.k === 'wallet') + 1, 0, tf); }
+      fields.forEach((f) => {
         if (f.type === 'id' && !f.ro) return;
         if (HIDE[p.table] && HIDE[p.table](f, v)) return;
         const lab = FIELD_LABEL[p.table] && FIELD_LABEL[p.table][f.k] ? FIELD_LABEL[p.table][f.k](v) : f.label;
