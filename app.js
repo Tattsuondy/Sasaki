@@ -297,7 +297,10 @@
     if (soft && ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && $('#main').contains(ae)) { S.pendingSoft = true; return; }
     const main = $('#main');
     const y = window.scrollY;
-    const page = cur ? PAGES[cur.page] : TABS[R.tab];
+    let page = cur ? PAGES[cur.page] : TABS[R.tab];
+    // スプレッドシート側の初期設定がまだ（口座も分類もない）
+    const d0 = data();
+    if (!d0.wallets.length && !d0.categories.length && !(cur && ['display', 'sync', 'device'].indexOf(cur.page) >= 0) && R.tab !== 'manage') page = notReadyPage;
     clear(main);
     main.dataset.view = cur ? 'sub-' + cur.page : R.tab;
     const top = $('#top');
@@ -502,7 +505,9 @@
 
   /* ================= 入力 ================= */
   const st = { type: '支出', amount: '', cat: { '支出': '', '収入': '' }, from: '', to: '', date: '', memo: '', settle: false };
-  const prefs = store.get('kakeibo.pref', { walletByCat: {}, lastFrom: '', lastTo: '', lastIncomeTo: '' });
+  // 前の版の設定が残っていても動くように、足りないものは補う
+  const prefs = Object.assign({ walletByCat: {}, lastFrom: '', lastTo: '', lastIncomeTo: '' }, store.get('kakeibo.pref', {}));
+  if (!prefs.walletByCat || typeof prefs.walletByCat !== 'object') prefs.walletByCat = {};
   const savePrefs = () => store.set('kakeibo.pref', prefs);
 
   function inputDirty() { return !!st.amount; }
@@ -515,7 +520,7 @@
 
     const cats = m.categories.filter((c) => c.kind === (st.type === '収入' ? '収入' : '支出'));
     if (st.type !== '振替' && !cats.some((c) => c.id === st.cat[st.type]) && cats.length) st.cat[st.type] = cats[0].id;
-    const catId = st.cat[st.type];
+    const catId = st.cat[st.type] || '';
     if (st.type === '支出' && !st.from) st.from = prefs.walletByCat[catId] || prefs.lastFrom || (m.wallets[0] && m.wallets[0].id) || '';
     if (st.type === '収入' && !st.to) st.to = prefs.lastIncomeTo || (m.accounts[0] && m.accounts[0].id) || '';
     if (st.type === '振替') { if (!st.from) st.from = (m.accounts[0] || {}).id || ''; if (!st.to) st.to = (m.accounts[1] || {}).id || ''; }
@@ -1322,6 +1327,13 @@
         try { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } catch (e) { /* noop */ }
         location.reload();
       } }, 'この端末の登録を解除する')));
+  }
+
+  function notReadyPage(main) {
+    main.appendChild(card('スプレッドシートの初期設定がまだです',
+      h('p', null, '口座や分類がまだ1件もありません。スプレッドシートを開いて、メニュー「家計簿 > 初期設定（旧データの引き継ぎ）」を実行してください。'),
+      h('p', { class: 'note' }, 'メニューが出ないときは、スプレッドシートを開き直してください。実行が終わったら、下のボタンで読み直します。'),
+      h('button', { type: 'button', class: 'save-btn', onclick: async () => { S.rev = 0; await flush(); toast(S.error ? '読み込めませんでした：' + S.error : '読み直しました'); render(true); } }, '読み直す')));
   }
 
   const TABS = { home: homePage, input: inputPage, list: listPage, plan: planPage, manage: managePage };
