@@ -271,3 +271,19 @@ textarea { resize: vertical; min-height: 4.5rem; }
 .row.todo { align-items: flex-start; }
 .row.todo .t1, .row.todo .t2 { white-space: normal; overflow: visible; }
 .row.todo .row-right .tag { margin-left: 0; }
+
+/* レシート */
+.receipt-bar { display: flex; align-items: center; gap: 0.6rem; margin: 0.2rem 0 0.4rem; }
+.receipt-bar .note { margin: 0; }
+.receipt-btn { border: 1px dashed var(--accent); background: var(--accent-weak); color: var(--accent); font-weight: 800; border-radius: 0.8rem; padding: 0.55rem 0.9rem; font-size: 0.9rem; flex-shrink: 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.item-row { padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
+.item-row.changed { background: var(--accent-weak); border-radius: 0.6rem; padding-left: 0.4rem; padding-right: 0.4rem; }
+.item-top, .item-bot { display: flex; gap: 0.4rem; align-items: center; }
+.item-bot { margin-top: 0.35rem; }
+.item-name { flex: 1; min-width: 0; }
+.item-price { width: 6.5rem !important; text-align: right; font-family: var(--num); font-weight: 700; }
+.cat-sel { flex: 1; }
+.x { flex-shrink: 0; width: 2.2rem; height: 2.2rem; border-radius: 0.6rem; border: 1px solid var(--line); background: var(--panel2); color: var(--muted); font-size: 1.1rem; }
+details.raw { margin: 0.5rem; color: var(--muted); font-size: 0.8rem; }
+details.raw pre { white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.6rem; max-height: 20rem; overflow: auto; }

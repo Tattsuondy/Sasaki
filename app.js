@@ -7,7 +7,7 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-21e';
+  const APP_VERSION = 'v2-2026-11-21g';
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -542,6 +542,14 @@
     main.appendChild(wrap);
     wrap.appendChild(seg([['支出', '支出'], ['収入', '収入'], ['振替', '振替・チャージ']], st.type, (v) => { st.type = v; st.from = ''; st.to = ''; refresh(); }, 'type-seg ' + (st.type === '収入' ? 'is-income' : st.type === '振替' ? 'is-transfer' : '')));
 
+    // レシートの読み取り
+    if (st.type === '支出') {
+      const file = h('input', { type: 'file', accept: 'image/*', class: 'hidden', onchange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) readReceipt(f); } });
+      wrap.appendChild(h('div', { class: 'receipt-bar' }, file,
+        h('button', { type: 'button', class: 'receipt-btn', onclick: () => file.click() }, '📷 レシートを読み取る'),
+        h('span', { class: 'note' }, 'お酒・日用品などに自動で分けます')));
+    }
+
     // よく使う組み合わせ
     if (st.type === '支出') {
       const fq = frequent(m);
@@ -1018,7 +1026,8 @@
       item('🏦', '口座・カード', m.accounts.length + '口座・' + m.cards.length + '枚', () => push('table', { table: 'wallets' })),
       item('🧾', '開始残高', '口座ごとに、今の残高を入れる', () => push('opening')),
       item('💳', 'カードの請求', '請求額の確定・引き落とし不可', () => push('bills')),
-      item('🗂', '分類と予算', m.categories.length + '件', () => push('table', { table: 'categories' }))));
+      item('🗂', '分類と予算', m.categories.length + '件', () => push('table', { table: 'categories' })),
+      item('🧾', 'レシートの読み取りルール', (m.data.rules || []).length + '件（品名の文字で分類を決める）', () => push('table', { table: 'rules' }))));
     main.appendChild(card('予定',
       item('🏠', '固定費・収入・年間の予定', m.plansAll.length + '件', () => push('table', { table: 'plans' })),
       item('✅', 'やることリスト', m.todos.filter((t) => !t.done).length + '件が残っています', () => push('todos')),
@@ -1083,6 +1092,7 @@
       case 'bonuses': return row({ icon: '🎉', t1: r.name, t2: [r.date, walletName(r.wallet)].filter(Boolean).join('・'), right: amountEl(r.net || 0), onclick: go2 });
       case 'notifyTpl': return row({ icon: r.enabled ? '💬' : '🔕', t1: r.id + '. ' + r.text, tag: r.level, tagCls: levelCls[r.level], t2: '送り先：' + r.to + '・' + r.type, right: '›', onclick: go2 });
       case 'notifyConf': return row({ t1: r.id, right: h('span', { class: 'tag' }, r.value), onclick: go2 });
+      case 'rules': { const c = catOf(r.category); return row({ icon: c ? c.icon : '・', t1: (c ? c.name : '分類なし') + '　←　' + r.keyword.slice(0, 40) + (r.keyword.length > 40 ? '…' : ''), tag: r.active === false ? '使わない' : null, right: '›', onclick: go2 }); }
       case 'lineDest': return row({ icon: r.enabled && r.lineId ? '✅' : '⬜️', t1: r.id, t2: r.lineId ? r.lineId.slice(0, 6) + '…' : 'ID未設定', right: '›', onclick: go2 });
       default: return row({ t1: r.name || r.id, right: '›', onclick: go2 });
     }
@@ -1367,6 +1377,130 @@
   }
 
   const TABS = { home: homePage, input: inputPage, list: listPage, plan: planPage, manage: managePage };
+  /* ================= レシート ================= */
+  function fileToJpeg(file) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const max = 2000, w = img.naturalWidth, hh = img.naturalHeight, r = Math.min(1, max / Math.max(w, hh));
+          const c = document.createElement('canvas');
+          c.width = Math.round(w * r); c.height = Math.round(hh * r);
+          const g = c.getContext('2d');
+          g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+          g.drawImage(img, 0, 0, c.width, c.height);
+          res(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+        };
+        img.onerror = () => rej(new Error('画像を開けませんでした。JPEGかPNGの写真を選んでください。'));
+        img.src = fr.result;
+      };
+      fr.onerror = () => rej(new Error('画像を読み込めませんでした。'));
+      fr.readAsDataURL(file);
+    });
+  }
+
+  async function readReceipt(file) {
+    if (!navigator.onLine) { toast('レシートの読み取りには通信が必要です', { error: true }); return; }
+    toast('レシートを読み取っています…（10秒ほど）', { long: true });
+    S.mode = 'ocr'; setStatus(); $('#status-text').textContent = '読み取り中…';
+    try {
+      const image = await fileToJpeg(file);
+      const res = await post({ action: 'ocr', image: image });
+      const m = model();
+      const cats = m.categories.filter((c) => c.kind === '支出');
+      const byName = (n) => (cats.find((c) => c.name === n) || {}).id || '';
+      const defaults = { food: prefs.rcFood || byName('食費') || (cats[0] || {}).id || '', other: prefs.rcOther || byName('日用品') || byName('食費') || '' };
+      const parsed = E.classifyReceipt(E.parseReceipt(res.text || '', m.today), m.data.rules || [], defaults);
+      if (!parsed.items.length && !parsed.total) { toast('文字を読み取れませんでした。明るい場所で、レシート全体がまっすぐ入るように撮ってください。', { error: true, long: true }); return; }
+      push('receipt', { parsed: parsed, text: res.text || '', defaults: defaults, from: st.from });
+      toast('読み取りました。分け方を確かめて登録してください');
+    } catch (e) { toast('読み取れませんでした：' + e.message, { error: true, long: true }); }
+    finally { S.mode = ''; setStatus(); }
+  }
+
+  function receiptPage(main, p) {
+    const m = model();
+    setTitle('レシートの読み取り');
+    const pr = p.parsed;
+    if (!p.state) {
+      p.state = { store: pr.store, date: pr.date || m.today, total: pr.total || '', from: p.from || prefs.lastFrom || (m.wallets[0] || {}).id || '', learn: true,
+        items: pr.items.map((it) => ({ name: it.name, price: it.price, category: it.category, auto: it.category, reduced: it.reduced })), dirty: false };
+    }
+    const S2 = p.state;
+    const cats = m.categories.filter((c) => c.kind === '支出');
+    const catSel = (val, on) => h('select', { class: 'cat-sel', onchange: (e) => on(e.target.value) }, cats.map((c) => h('option', { value: c.id, selected: c.id === val ? 'selected' : null }, (c.icon || '') + ' ' + c.name)));
+    const mark = () => { S2.dirty = true; drawSum(); };
+
+    // 店・日付・合計・支払い
+    const store = h('input', { type: 'text', value: S2.store, placeholder: '店名', oninput: (e) => { S2.store = e.target.value; S2.dirty = true; } });
+    const date = h('input', { type: 'date', value: S2.date, onchange: (e) => { S2.date = e.target.value; S2.dirty = true; } });
+    const total = h('input', { type: 'text', inputmode: 'numeric', class: 'num-input', value: S2.total === '' ? '' : Number(S2.total).toLocaleString('ja-JP'), oninput: (e) => { const v = e.target.value.replace(/[,円¥\s]/g, ''); S2.total = v === '' ? '' : Number(v) || ''; mark(); } });
+    const wsel = walletSelect(m.wallets, S2.from); wsel.addEventListener('change', () => { S2.from = wsel.value; S2.dirty = true; });
+    main.appendChild(card(null, fieldWrap('店名（メモになります）', store), h('div', { class: 'grid2' }, fieldWrap('日付', date), fieldWrap('レシートの合計（円）', total)), fieldWrap('支払い', wsel),
+      !pr.total ? h('p', { class: 'note warn' }, '合計を読み取れませんでした。レシートの合計を入れてください（空欄なら品目の合計を使います）。') : null));
+
+    // 品目
+    const list = h('div');
+    const drawItems = () => {
+      clear(list);
+      S2.items.forEach((it, i) => {
+        const name = h('input', { type: 'text', value: it.name, class: 'item-name', oninput: (e) => { it.name = e.target.value; S2.dirty = true; } });
+        const price = h('input', { type: 'text', inputmode: 'numeric', class: 'item-price', value: String(it.price), oninput: (e) => { it.price = Number(e.target.value.replace(/[,円¥\s]/g, '').replace(/^−/, '-')) || 0; mark(); } });
+        list.appendChild(h('div', { class: 'item-row' + (it.category !== it.auto ? ' changed' : '') },
+          h('div', { class: 'item-top' }, name, price, h('button', { type: 'button', class: 'x', 'aria-label': 'この品目を消す', onclick: () => { S2.items.splice(i, 1); drawItems(); mark(); } }, '×')),
+          h('div', { class: 'item-bot' }, catSel(it.category, (v) => { it.category = v; drawItems(); mark(); }), it.reduced ? h('span', { class: 'tag' }, '軽減税率') : null)));
+      });
+      if (!S2.items.length) list.appendChild(empty('品目を読み取れませんでした。下の「＋品目を足す」で入れるか、まとめて1件で登録してください。'));
+    };
+    drawItems();
+    main.appendChild(card('品目（' + pr.items.length + '件を読み取り）', list,
+      h('button', { type: 'button', class: 'link', onclick: () => { S2.items.push({ name: '', price: 0, category: p.defaults.food, auto: p.defaults.food }); drawItems(); mark(); } }, '＋ 品目を足す')));
+
+    // 登録される内容
+    const sum = h('div');
+    const drawSum = () => {
+      clear(sum);
+      const parts = E.splitByCategory(S2.items, Number(S2.total) || 0);
+      const itemsTotal = S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0);
+      parts.forEach((x) => { const c = catOf(x.category); sum.appendChild(row({ icon: c ? c.icon : '・', t1: c ? c.name : '分類なし', t2: '品目の計 ' + yen(x.items), right: amountEl(-x.amount) })); });
+      if (!parts.length) sum.appendChild(empty('品目がありません'));
+      sum.appendChild(h('p', { class: 'note' }, '品目の合計 ' + yen(itemsTotal) + (S2.total ? '／レシートの合計 ' + yen(S2.total) + '。差（税・値引きなど）は、分類ごとの金額の割合で分けています。' : '')));
+    };
+    drawSum();
+    main.appendChild(card('登録される記録', sum,
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S2.learn, onchange: (e) => { S2.learn = e.target.checked; } }), h('span', null, '変えた分類を覚えて、次から自動で分ける'))));
+
+    const save = (oneLine) => {
+      try {
+        const parts = oneLine ? [{ category: p.defaults.food, amount: Number(S2.total) || S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0) }] : E.splitByCategory(S2.items, Number(S2.total) || 0);
+        if (!parts.length || parts.some((x) => !(x.amount > 0))) throw new Error('金額が正しくありません。合計か品目の金額を確かめてください。');
+        if (!S2.from) throw new Error('支払い（口座・カード）を選んでください。');
+        const ref = rid('rc');
+        const memo = (S2.store || 'レシート').trim();
+        parts.forEach((x) => put('tx', { id: rid('t'), date: S2.date || m.today, type: '支出', amount: x.amount, category: x.category, from: S2.from, to: '', memo: memo,
+          user: S.user, settle: (catOf(x.category) || {}).group === '立替（あとで戻る）' ? '未精算' : '', ref: '', created: nowStr() }));
+        if (S2.learn && !oneLine) {
+          S2.items.filter((it) => it.category !== it.auto && it.name.trim()).forEach((it) => {
+            const key = E.normText(it.name).replace(/\d+(ml|mL|ML|g|kg|L|l|個|本|缶|入|枚|R|m)?/g, '').replace(/[\s()（）\[\]×x*]/g, '').slice(0, 15);
+            if (key.length >= 2) put('rules', { id: rid('r'), keyword: key, category: it.category, order: 5, active: true });
+          });
+        }
+        prefs.lastFrom = S2.from; savePrefs();
+        R.guard = null;
+        toast(parts.length + '件に分けて登録しました（' + memo + '）');
+        back();
+        return true;
+      } catch (e) { toast(e.message, { error: true }); return false; }
+    };
+    R.guard = { form: true, dirty: () => S2.dirty, save: () => save(false), title: 'レシートの内容をまだ登録していません', saveLabel: '分けて登録する' };
+    main.appendChild(h('div', { class: 'form-acts pad' },
+      h('button', { type: 'button', onclick: back }, 'やめる'),
+      h('button', { type: 'button', onclick: () => save(true) }, 'まとめて1件で登録'),
+      h('button', { type: 'button', class: 'primary', onclick: () => save(false) }, '分けて登録')));
+    main.appendChild(h('details', { class: 'raw' }, h('summary', null, '読み取った文字を見る'), h('pre', null, p.text || '（なし）')));
+  }
+
   /* ================= やることリスト ================= */
   let todoView = 'open';
   function todoRow(t, m) {
@@ -1409,7 +1543,7 @@
     main.appendChild(h('button', { type: 'button', class: 'link center', onclick: () => push('edit', { table: 'todos', id: null }) }, '＋ 期限やメモをつけて追加'));
   }
 
-  const PAGES = { todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
+  const PAGES = { receipt: receiptPage, todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
 
   /* ================= 登録画面 ================= */
   function showSetup(msg) {

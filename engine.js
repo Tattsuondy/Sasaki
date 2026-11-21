@@ -158,6 +158,16 @@ var Engine = (function () {
         { k: 'enabled', label: '有効', type: 'bool', def: true }
       ]
     },
+    rules: {
+      sheet: 'レシートの読み取りルール', label: 'レシートの読み取りルール', prefix: 'r',
+      fields: [
+        { k: 'id', type: 'id' },
+        { k: 'keyword', label: '品名に含まれる文字（カンマで複数）', type: 'text', req: true },
+        { k: 'category', label: '分ける先の分類', type: 'ref', ref: 'categories', req: true },
+        { k: 'order', label: '並び順（小さいほど先に当てる）', type: 'int', def: 50 },
+        { k: 'active', label: '使う', type: 'bool', def: true }
+      ]
+    },
     todos: {
       sheet: 'やること', label: 'やることリスト', prefix: 'k',
       fields: [
@@ -328,6 +338,123 @@ var Engine = (function () {
     m.bonuses = (data.bonuses || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
     m.allocs = (data.allocs || []).slice().sort(byOrder);
     return m;
+  }
+
+  /* ================= レシートの読み取り ================= */
+  // 全角を半角に、よくある読み違いを直す
+  function normText(s) {
+    return String(s || '').normalize('NFKC').replace(/[‐－―ー−]/g, (c) => (c === 'ー' ? c : '-')).replace(/[￥\\]/g, '¥').replace(/\r/g, '');
+  }
+  const SKIP = /(合計|小計|総計|お買上|お買い上げ|お預|預り|預かり|釣|おつり|お釣|税|対象|ポイント|点数|クレジット|カード|電子マネー|PayPay|残高|支払|現金|領収|レジ|担当|TEL|電話|No\.|伝票|会員|ありがとう|株式会社|〒|登録番号|値引前)/i;
+  const PRICE = /[¥]?\s*(-?\d{1,3}(?:,\d{3})+|-?\d{1,6})\s*円?\s*([※*軽外内]|\(軽\)|\(8%\)|\(10%\))?\s*$/;
+
+  /**
+   * レシートの文字から、店名・日付・合計・品目を取り出す
+   * 戻り値 { store, date, total, items:[{name, price, reduced}], hasReduced }
+   */
+  function parseReceipt(text, today) {
+    const lines = normText(text).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const out = { store: '', date: '', total: null, items: [], hasReduced: false };
+    // 日付
+    const y0 = +String(today).slice(0, 4);
+    for (const l of lines) {
+      let m = /(20\d{2})\s*[年\/.-]\s*(\d{1,2})\s*[月\/.-]\s*(\d{1,2})/.exec(l);
+      let y = m ? +m[1] : null;
+      if (!m) { m = /(?:令和|R)\s*(\d{1,2})\s*[年\/.]\s*(\d{1,2})\s*[月\/.]\s*(\d{1,2})/.exec(l); if (m) y = 2018 + +m[1]; }
+      if (!m) { m = /(?:^|\D)(\d{2})\/(\d{1,2})\/(\d{1,2})(?:\D|$)/.exec(l); if (m) y = 2000 + +m[1]; }
+      if (m && y >= y0 - 1 && y <= y0 + 1) {
+        const d = toDateStr(y + '-' + m[m.length - 2] + '-' + m[m.length - 1]);
+        if (d && (!today || d <= today)) { out.date = d; break; }
+      }
+    }
+    // 合計（「小計」より「合計」を優先。お預り・お釣りは除く）
+    const amountIn = (l) => { const m = /(-?\d{1,3}(?:,\d{3})+|-?\d{1,7})(?!.*\d)/.exec(l.replace(/[¥円\s]/g, (c) => (c === ' ' ? ' ' : ''))); return m ? Number(m[1].replace(/,/g, '')) : null; };
+    const findTotal = (re) => {
+      for (let i = 0; i < lines.length; i++) {
+        if (!re.test(lines[i]) || /(お預|預り|釣|対象|税額|内税|外税|消費税|点数)/.test(lines[i])) continue;
+        let v = amountIn(lines[i].replace(re, ''));
+        if ((v === null || v === 0) && lines[i + 1] && !/[ぁ-んァ-ン一-龥]/.test(lines[i + 1])) v = amountIn(lines[i + 1]);
+        if (v !== null && v > 0) return v;
+      }
+      return null;
+    };
+    out.total = findTotal(/(合計|総合計|お買上げ?|お買い上げ|ご請求額?|お支払い?金額)/) || findTotal(/小計/);
+    // 店名：最初の、数字だらけでない行
+    for (const l of lines.slice(0, 6)) {
+      if (/^(領収書|レシート|receipt)$/i.test(l) || /\d{2,}[-\d]{6,}/.test(l) || /(TEL|電話|〒|住所|登録番号)/i.test(l)) continue;
+      const letters = l.replace(/[\d\s¥,.:\-\/()]/g, '');
+      if (letters.length >= 2) { out.store = l.slice(0, 40); break; }
+    }
+    // 品目：「品名 … 金額」の行
+    const names = [], prices = [];
+    let afterTotal = false;
+    lines.forEach((l) => {
+      if (/(合計|小計|お買上)/.test(l)) afterTotal = true;
+      if (afterTotal || SKIP.test(l)) return;
+      if (/\d{1,2}:\d{2}/.test(l) || /(20\d{2}|令和|R\d)\s*[年\/.]/.test(l) || /^\d{2}\/\d{1,2}\/\d{1,2}/.test(l)) return;   // 日付・時刻の行
+      const m = PRICE.exec(l);
+      const reduced = /([※*軽]|\(軽\)|\(8%\))/.test(l);
+      if (m) {
+        const name = l.slice(0, m.index).replace(/[¥\s]+$/, '').replace(/^\d{4,}\s*/, '').replace(/\s*\d+\s*(個|点|コ)\s*[x×*@]?\s*\d*\s*$/, '').trim();
+        const price = Number(m[1].replace(/,/g, ''));
+        if (/(値引|割引|クーポン|OFF|引)/i.test(name) && out.items.length) { out.items[out.items.length - 1].price -= Math.abs(price); return; }
+        if (name.replace(/[\d\s.,%-]/g, '').length >= 1 && price !== 0 && Math.abs(price) < 1000000) {
+          out.items.push({ name: name.slice(0, 40), price: price, reduced: reduced });
+          if (reduced) out.hasReduced = true;
+          return;
+        }
+        if (!name && price > 0) { prices.push({ price: price, reduced: reduced }); return; }
+      }
+      if (/[ぁ-んァ-ン一-龥A-Za-z]{2,}/.test(l) && !/\d{3,}/.test(l)) names.push(l.slice(0, 40));
+    });
+    // 品名と金額が別々の行に分かれて読まれたとき：順番に組み合わせる
+    if (out.items.length < 2 && names.length >= 2 && prices.length >= 2) {
+      const n = Math.min(names.length, prices.length);
+      const start = names.length - n;
+      out.items = [];
+      for (let i = 0; i < n; i++) { out.items.push({ name: names[start + i], price: prices[i].price, reduced: prices[i].reduced }); if (prices[i].reduced) out.hasReduced = true; }
+    }
+    return out;
+  }
+
+  /**
+   * 品目を分類に振り分け、合計に合わせて分類ごとの金額を出す
+   * rules: [{keyword, category, order, active}]、defaults: { food: 分類ID, other: 分類ID }
+   */
+  function classifyReceipt(parsed, rules, defaults) {
+    const rs = (rules || []).filter((r) => r.active !== false && r.keyword && r.category).sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+    const hit = (name) => {
+      const n = normText(name).toLowerCase();
+      for (const r of rs) {
+        const keys = String(r.keyword).split(/[,、]/).map((k) => normText(k).trim().toLowerCase()).filter(Boolean);
+        if (keys.some((k) => n.indexOf(k) >= 0)) return r.category;
+      }
+      return '';
+    };
+    const items = parsed.items.map((it) => {
+      const byRule = hit(it.name);
+      const cat = byRule || (parsed.hasReduced && !it.reduced ? defaults.other : defaults.food) || defaults.food;
+      return Object.assign({}, it, { category: cat, byRule: !!byRule });
+    });
+    return Object.assign({}, parsed, { items: items });
+  }
+
+  /** 分類ごとに合計し、レシートの合計（税・値引き込み）に合わせて按分する */
+  function splitByCategory(items, total) {
+    const sums = {};
+    items.forEach((it) => { if (it.category) sums[it.category] = (sums[it.category] || 0) + (Number(it.price) || 0); });
+    const keys = Object.keys(sums).filter((k) => sums[k] !== 0);
+    const S = keys.reduce((a, k) => a + sums[k], 0);
+    const T = total && total > 0 ? total : S;
+    if (!S) return [];
+    let used = 0;
+    const big = keys.slice().sort((a, b) => sums[b] - sums[a]);
+    const out = big.map((k, i) => {
+      const v = i === big.length - 1 ? T - used : Math.round(sums[k] * T / S);
+      used += v;
+      return { category: k, items: sums[k], amount: v };
+    });
+    return out.filter((x) => x.amount > 0);
   }
 
   /** やることの並び：済んでいないもの → 期限が近い順（期限なしは後ろ）→ 並び順 */
@@ -697,7 +824,7 @@ var Engine = (function () {
     isAccount: isAccount, isCard: isCard, build: build, cycleOf: cycleOf, bills: bills, cardStatus: cardStatus, balances: balances,
     planOccurs: planOccurs, planRef: planRef, occurrences: occurrences, nextOccurrence: nextOccurrence, projection: projection,
     month: month, tatekaeOpen: tatekaeOpen, annual: annual, bonusView: bonusView, alerts: alerts,
-    yen: yen, md: md, afterText: afterText
+    yen: yen, md: md, afterText: afterText, normText: normText, parseReceipt: parseReceipt, classifyReceipt: classifyReceipt, splitByCategory: splitByCategory
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;
