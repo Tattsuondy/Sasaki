@@ -7,7 +7,7 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-21d';
+  const APP_VERSION = 'v2-2026-11-21e';
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -42,11 +42,12 @@
 
   /* ================= 表示の設定（端末ごと） ================= */
   const HOME_SECTIONS = [
-    ['alerts', 'お知らせ'], ['assets', '資産のまとめ'], ['accounts', '口座'], ['cards', 'カード'], ['month', '今月の支出'], ['upcoming', '7日以内の予定'], ['fixed', '今月の固定費']
+    ['alerts', 'お知らせ'], ['todos', 'やること'], ['assets', '資産のまとめ'], ['accounts', '口座'], ['cards', 'カード'], ['month', '今月の支出'], ['upcoming', '7日以内の予定'], ['fixed', '今月の固定費']
   ];
   const UI_DEF = { scale: 100, theme: 'auto', accent: 'green', density: 'normal', yen: 'suffix', keypad: 'calc', start: 'home', afterSave: 'stay',
     home: HOME_SECTIONS.map((s) => s[0]), days: 62, mask: false, motion: true, listOrder: 'new' };
   let UI = Object.assign({}, UI_DEF, store.get('kakeibo.ui', {}));
+  if (!UI.homeV2) { if (UI.home.indexOf('todos') < 0) UI.home.splice(Math.min(1, UI.home.length), 0, 'todos'); UI.homeV2 = true; store.set('kakeibo.ui', UI); }
   function saveUI() { store.set('kakeibo.ui', UI); applyUI(); }
   function applyUI() {
     const r = document.documentElement;
@@ -418,6 +419,7 @@
     plan_overdue: () => { planTab = 'outlook'; go('plan'); },
     shortfall: () => { planTab = 'outlook'; go('plan'); },
     deadline: (a) => push('edit', { table: 'deadlines', id: a.deadline }),
+    todo: () => push('todos'),
     budget_over: () => { listView = 'cats'; go('list'); },
     budget_near: () => { listView = 'cats'; go('list'); }
   };
@@ -485,6 +487,12 @@
         const ev = proj.events.filter((e) => e.date <= end);
         return card('7日以内の予定', ev.length ? ev.slice(0, 8).map((e) => eventRow(e, m)) : empty('7日以内の予定はありません'),
           h('button', { type: 'button', class: 'link', onclick: () => { planTab = 'outlook'; go('plan'); } }, '予定をすべて見る'));
+      },
+      todos() {
+        const open = m.todos.filter((t) => !t.done);
+        if (!open.length) return null;
+        return card('やること（' + open.length + '件）', open.slice(0, 4).map((t) => todoRow(t, m)),
+          h('button', { type: 'button', class: 'link', onclick: () => push('todos') }, 'やることリストを開く'));
       },
       fixed() {
         const s = E.month(m, E.ymOf(m.today));
@@ -1013,6 +1021,7 @@
       item('🗂', '分類と予算', m.categories.length + '件', () => push('table', { table: 'categories' }))));
     main.appendChild(card('予定',
       item('🏠', '固定費・収入・年間の予定', m.plansAll.length + '件', () => push('table', { table: 'plans' })),
+      item('✅', 'やることリスト', m.todos.filter((t) => !t.done).length + '件が残っています', () => push('todos')),
       item('📅', '期限', m.deadlines.filter((d) => !d.done).length + '件', () => push('table', { table: 'deadlines' })),
       item('🎉', 'ボーナス', m.bonuses.length + '回', () => push('table', { table: 'bonuses' }))));
     main.appendChild(card('通知（LINE）',
@@ -1140,6 +1149,7 @@
           if (out.type === '残高合わせ') out.from = '';
         }
         if (p.table === 'allocs' && out.to) out.category = '';
+        if (p.table === 'todos' && out.done !== (cur ? cur.done === true : false)) out.doneAt = out.done ? nowStr() : '';
         if (p.table === 'plans') { if (out.kind !== '振替') out.to = ''; else out.category = ''; }
         put(p.table, out);
         R.guard = null;
@@ -1357,7 +1367,49 @@
   }
 
   const TABS = { home: homePage, input: inputPage, list: listPage, plan: planPage, manage: managePage };
-  const PAGES = { account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
+  /* ================= やることリスト ================= */
+  let todoView = 'open';
+  function todoRow(t, m) {
+    const left = t.due ? E.diffDays(m.today, t.due) : null;
+    const tag = t.done ? (t.doneAt ? md(t.doneAt.slice(0, 10)) + ' 済' : '済') : left === null ? null : left < 0 ? '期限切れ' : left === 0 ? '今日' : left <= 7 ? 'あと' + left + '日' : md(t.due);
+    const tagCls = t.done ? '' : left !== null && left < 0 ? 'high' : left !== null && left <= 3 ? 'mid' : '';
+    const check = h('button', { type: 'button', class: 'todo-check' + (t.done ? ' on' : ''), 'aria-label': t.done ? '未完了に戻す' : '済みにする',
+      onclick: (ev) => { ev.stopPropagation(); toggleTodo(t); } }, t.done ? '✓' : '');
+    return row({ icon: check, t1: t.title, cls: 'todo' + (t.done ? ' done' : ''),
+      t2: [t.who, t.memo].filter(Boolean).join('・'), right: tag ? h('span', { class: 'tag ' + tagCls }, tag) : '',
+      onclick: () => push('edit', { table: 'todos', id: t.id }) });
+  }
+  function toggleTodo(t) {
+    const next = !t.done;
+    put('todos', Object.assign({}, stripMeta(t), { done: next, doneAt: next ? nowStr() : '' }));
+    toast(next ? '「' + t.title + '」を済みにしました' : '未完了に戻しました', next ? { undo: () => put('todos', Object.assign({}, stripMeta(t), { done: false, doneAt: '' })) } : {});
+  }
+  function todosPage(main) {
+    const m = model();
+    setTitle('やることリスト');
+    const open = m.todos.filter((t) => !t.done), done = m.todos.filter((t) => t.done);
+    main.appendChild(card(null, h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, '残り'), h('div', { class: 'big' }, open.length + '件')),
+      h('div', { class: 'r' }, h('div', { class: 'lbl' }, '済み'), h('div', { class: 'v' }, done.length + '件'))), bar(m.todos.length ? done.length / m.todos.length : 0)));
+    // すぐ追加
+    const input = h('input', { type: 'text', placeholder: 'やることを入れて追加', maxlength: '200', enterkeyhint: 'done' });
+    const add = () => {
+      const v = input.value.trim(); if (!v) return;
+      try { put('todos', { id: rid('k'), title: v, due: '', group: '', who: '', done: false, doneAt: '', order: 999, memo: '' }); input.value = ''; toast('追加しました'); }
+      catch (e) { toast(e.message, { error: true }); }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    main.appendChild(h('div', { class: 'quick-add' }, input, h('button', { type: 'button', class: 'primary', onclick: add }, '追加')));
+    main.appendChild(seg([['open', '残り'], ['soon', '期限が近い'], ['done', '済み'], ['all', 'すべて']], todoView, (v) => { todoView = v; refresh(); }));
+    let list = todoView === 'open' ? open : todoView === 'done' ? done.slice().reverse() : todoView === 'soon' ? open.filter((t) => t.due && E.diffDays(m.today, t.due) <= 14) : m.todos;
+    if (!list.length) { main.appendChild(card(null, empty(todoView === 'done' ? '済んだものはまだありません' : 'やることはありません'))); return; }
+    const groups = [];
+    list.forEach((t) => { const g = t.group || 'そのほか'; let x = groups.find((y) => y[0] === g); if (!x) { x = [g, []]; groups.push(x); } x[1].push(t); });
+    if (todoView === 'soon') groups.splice(0, groups.length, ['期限が2週間以内', list]);
+    groups.forEach(([g, items]) => main.appendChild(card(g + '（' + items.length + '）', items.map((t) => todoRow(t, m)))));
+    main.appendChild(h('button', { type: 'button', class: 'link center', onclick: () => push('edit', { table: 'todos', id: null }) }, '＋ 期限やメモをつけて追加'));
+  }
+
+  const PAGES = { todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
 
   /* ================= 登録画面 ================= */
   function showSetup(msg) {
