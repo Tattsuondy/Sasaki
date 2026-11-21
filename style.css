@@ -259,3 +259,15 @@ textarea { resize: vertical; min-height: 4.5rem; }
   .sheet-wrap { align-items: center; padding: 1rem; }
   .sheet { border-radius: 1.2rem; }
 }
+
+/* やることリスト */
+.todo-check { width: 1.6rem; height: 1.6rem; border-radius: 50%; border: 2px solid var(--muted); background: var(--panel); color: #fff; font-weight: 900; font-size: 0.9rem; line-height: 1; display: grid; place-items: center; padding: 0; }
+.todo-check.on { background: var(--accent); border-color: var(--accent); }
+.row.done .t1 { color: var(--muted); text-decoration: line-through; }
+.row .ico:has(.todo-check) { background: none; }
+.quick-add { display: flex; gap: 0.5rem; margin-bottom: var(--gap); }
+.quick-add input { flex: 1; }
+.quick-add button { flex-shrink: 0; border: 0; border-radius: 0.7rem; padding: 0 1.1rem; font-weight: 800; }
+.row.todo { align-items: flex-start; }
+.row.todo .t1, .row.todo .t2 { white-space: normal; overflow: visible; }
+.row.todo .row-right .tag { margin-left: 0; }
