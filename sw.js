@@ -3,7 +3,7 @@
  * 画面のファイル（HTML・JS・CSS・アイコン）だけを端末に置きます。家計のデータはここでは扱いません。
  * 新しい版を GitHub に置いたら、下の VERSION を変えてください。
  */
-const VERSION = 'kakeibo-v2-2026-11-21g';
+const VERSION = 'kakeibo-v2-2026-11-21i';
 const FILES = ['./', './index.html', './app.js', './engine.js', './style.css', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {

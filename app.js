@@ -7,7 +7,7 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-21g';
+  const APP_VERSION = 'v2-2026-11-21i';
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -1384,13 +1384,24 @@
       fr.onload = () => {
         const img = new Image();
         img.onload = () => {
-          const max = 2000, w = img.naturalWidth, hh = img.naturalHeight, r = Math.min(1, max / Math.max(w, hh));
+          // 文字認識しやすいように：長い辺を最大3000pxにし、白黒にしてコントラストを上げる
+          const max = 3000, w = img.naturalWidth, hh = img.naturalHeight, r = Math.min(1, max / Math.max(w, hh));
           const c = document.createElement('canvas');
           c.width = Math.round(w * r); c.height = Math.round(hh * r);
           const g = c.getContext('2d');
           g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
           g.drawImage(img, 0, 0, c.width, c.height);
-          res(c.toDataURL('image/jpeg', 0.85).split(',')[1]);
+          try {
+            const d = g.getImageData(0, 0, c.width, c.height), px = d.data, hist = new Uint32Array(256);
+            for (let i = 0; i < px.length; i += 4) { const y = (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000 | 0; px[i] = y; hist[y]++; }
+            const total = px.length / 4; let acc = 0, lo = 0, hi = 255;
+            for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > total * 0.02) { lo = v; break; } }
+            acc = 0; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > total * 0.10) { hi = v; break; } }
+            const span = Math.max(1, hi - lo);
+            for (let i = 0; i < px.length; i += 4) { const y = Math.max(0, Math.min(255, (px[i] - lo) * 255 / span)); px[i] = px[i + 1] = px[i + 2] = y; }
+            g.putImageData(d, 0, 0);
+          } catch (e) { /* 加工できなくても、そのまま送る */ }
+          res(c.toDataURL('image/jpeg', 0.9).split(',')[1]);
         };
         img.onerror = () => rej(new Error('画像を開けませんでした。JPEGかPNGの写真を選んでください。'));
         img.src = fr.result;
@@ -1437,7 +1448,12 @@
     const date = h('input', { type: 'date', value: S2.date, onchange: (e) => { S2.date = e.target.value; S2.dirty = true; } });
     const total = h('input', { type: 'text', inputmode: 'numeric', class: 'num-input', value: S2.total === '' ? '' : Number(S2.total).toLocaleString('ja-JP'), oninput: (e) => { const v = e.target.value.replace(/[,円¥\s]/g, ''); S2.total = v === '' ? '' : Number(v) || ''; mark(); } });
     const wsel = walletSelect(m.wallets, S2.from); wsel.addEventListener('change', () => { S2.from = wsel.value; S2.dirty = true; });
-    main.appendChild(card(null, fieldWrap('店名（メモになります）', store), h('div', { class: 'grid2' }, fieldWrap('日付', date), fieldWrap('レシートの合計（円）', total)), fieldWrap('支払い', wsel),
+    const cands = (pr.candidates || []).filter((c) => c.value !== pr.total || pr.candidates.length > 1);
+    const candBox = cands.length > 1 ? h('div', null, h('div', { class: 'flabel' }, '合計の候補（違っていたら押して選ぶ）'),
+      h('div', { class: 'chips' }, cands.map((c) => h('button', { type: 'button', class: 'chip' + (Number(S2.total) === c.value ? ' on' : ''), title: c.why.join('・'),
+        onclick: (e) => { S2.total = c.value; total.value = c.value.toLocaleString('ja-JP'); candBox.querySelectorAll('.chip').forEach((x) => x.classList.toggle('on', x === e.currentTarget)); mark(); } },
+        yen(c.value) + '（' + c.why[0] + '）')))) : null;
+    main.appendChild(card(null, fieldWrap('店名（メモになります）', store), h('div', { class: 'grid2' }, fieldWrap('日付', date), fieldWrap('レシートの合計（円）', total)), candBox, fieldWrap('支払い', wsel),
       !pr.total ? h('p', { class: 'note warn' }, '合計を読み取れませんでした。レシートの合計を入れてください（空欄なら品目の合計を使います）。') : null));
 
     // 品目

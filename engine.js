@@ -343,7 +343,66 @@ var Engine = (function () {
   /* ================= レシートの読み取り ================= */
   // 全角を半角に、よくある読み違いを直す
   function normText(s) {
-    return String(s || '').normalize('NFKC').replace(/[‐－―ー−]/g, (c) => (c === 'ー' ? c : '-')).replace(/[￥\\]/g, '¥').replace(/\r/g, '');
+    return String(s || '').normalize('NFKC').replace(/[‐－―ー−]/g, (c) => (c === 'ー' ? c : '-')).replace(/[￥\\]/g, '¥').replace(/\r/g, '')
+      // 文字認識のよくある読み違い：「¥」→「半・Y・羊」、「2,715」→「2.715」「2, 715」、数字の中の O・l
+      .replace(/(^|[\s:：])[半羊Y](?=\s*\d)/g, '$1¥')
+      .replace(/(\d)\s*[.,]\s*(\d{3})(?!\d)/g, '$1,$2')
+      .replace(/(\d)[Oo](?=\d)/g, '$10').replace(/(\d)[lI|](?=\d)/g, '$11');
+  }
+
+  /** 合計の候補を集めて、根拠の強さで点数を付ける。いちばん点の高いものを合計とする */
+  function totalCandidates(lines, itemsSum) {
+    const num = (str) => { const m = /(-?\d{1,3}(?:,\d{3})+|-?\d{1,7})(?!.*\d)/.exec(String(str).replace(/[¥円]/g, '')); return m ? Number(m[1].replace(/,/g, '')) : null; };
+    const onlyNum = (l) => /^[¥\s]*-?[\d,]+\s*円?\s*[※*軽]?$/.test(l);
+    const cands = {};
+    const add = (v, pts, why) => {
+      if (v === null || !(v > 0) || v > 1000000) return;
+      const c = cands[v] || (cands[v] = { value: v, score: 0, why: [] });
+      c.score += pts; if (c.why.indexOf(why) < 0) c.why.push(why);
+    };
+    const KW = [[/(総合計|合\s*計|お買上げ?(金額|計)?|お買い上げ|ご請求額?|お会計)/, 6, '合計'], [/(お支払い?(金額|額)?|支払金額)/, 5, 'お支払'], [/小\s*計/, 2, '小計']];
+    const PAY = /(クレジット|カード|電子マネー|PayPay|paypay|QUICPay|iD|Suica|PASMO|WAON|nanaco|楽天ペイ|d払い|au ?PAY|交通系)/i;
+    const NOT = /(お預|預り|預かり|釣|対象|税額|内税|外税|消費税|点数|ポイント|残高|値引前)/;
+    let dep = null, chg = null;
+    lines.forEach((l, i) => {
+      const v = onlyNum(l) ? null : num(l);
+      if (/(お預|預り|預かり)/.test(l) && v !== null) dep = v;
+      if (/(お釣|釣り|おつり|釣銭)/.test(l) && v !== null) chg = v;
+      if (NOT.test(l)) return;
+      KW.forEach(([re, pts, why]) => {
+        if (!re.test(l)) return;
+        let x = num(l.replace(re, ''));
+        if ((x === null || x === 0) && lines[i + 1] && onlyNum(lines[i + 1])) x = num(lines[i + 1]);
+        add(x, pts, why);
+      });
+      if (PAY.test(l) && v !== null) add(v, 3, '支払い方法の行');
+    });
+    // 項目名だけが並び、そのあと金額だけが同じ順に並ぶ形（表の2列が別々に読まれたとき）
+    for (let i = 0; i < lines.length; i++) {
+      const labels = [];
+      let j = i;
+      while (j < lines.length && !onlyNum(lines[j]) && /[ぁ-んァ-ン一-龥]/.test(lines[j]) && num(lines[j]) === null) { labels.push(lines[j]); j++; }
+      const vals = [];
+      while (j < lines.length && onlyNum(lines[j])) { vals.push(num(lines[j])); j++; }
+      if (labels.length >= 2 && vals.length >= 2) {
+        const n = Math.min(labels.length, vals.length);
+        for (let k = 0; k < n; k++) {
+          const lab = labels[labels.length - n + k], v = vals[k];
+          if (/(お預|預り|預かり)/.test(lab)) dep = v;
+          else if (/(お釣|釣り|おつり)/.test(lab)) chg = v;
+          else if (!NOT.test(lab)) KW.forEach(([re, pts, why]) => { if (re.test(lab)) add(v, pts, why + '（列）'); });
+        }
+        i = j - 1;
+      }
+    }
+    if (dep !== null && chg !== null && dep - chg > 0) add(dep - chg, 8, 'お預り−お釣り');
+    if (itemsSum > 0) Object.keys(cands).forEach((k) => {
+      const c = cands[k];
+      if (c.value === itemsSum) { c.score += 2; c.why.push('品目の合計と一致'); }
+      else if (c.value > itemsSum && c.value <= Math.ceil(itemsSum * 1.105)) { c.score += 3; c.why.push('品目の合計＋税と合う'); }
+    });
+    if (itemsSum > 0 && !Object.keys(cands).length) add(itemsSum, 1, '品目の合計');
+    return Object.keys(cands).map((k) => cands[k]).sort((a, b) => b.score - a.score || b.value - a.value).slice(0, 6);
   }
   const SKIP = /(合計|小計|総計|お買上|お買い上げ|お預|預り|預かり|釣|おつり|お釣|税|対象|ポイント|点数|クレジット|カード|電子マネー|PayPay|残高|支払|現金|領収|レジ|担当|TEL|電話|No\.|伝票|会員|ありがとう|株式会社|〒|登録番号|値引前)/i;
   const PRICE = /[¥]?\s*(-?\d{1,3}(?:,\d{3})+|-?\d{1,6})\s*円?\s*([※*軽外内]|\(軽\)|\(8%\)|\(10%\))?\s*$/;
@@ -378,14 +437,14 @@ var Engine = (function () {
       }
       return null;
     };
-    out.total = findTotal(/(合計|総合計|お買上げ?|お買い上げ|ご請求額?|お支払い?金額)/) || findTotal(/小計/);
+    out._findTotal = findTotal;   // 旧方式（使わない）
     // 店名：最初の、数字だらけでない行
     for (const l of lines.slice(0, 6)) {
       if (/^(領収書|レシート|receipt)$/i.test(l) || /\d{2,}[-\d]{6,}/.test(l) || /(TEL|電話|〒|住所|登録番号)/i.test(l)) continue;
       const letters = l.replace(/[\d\s¥,.:\-\/()]/g, '');
       if (letters.length >= 2) { out.store = l.slice(0, 40); break; }
     }
-    // 品目：「品名 … 金額」の行
+    // 品目：「品名 … 金額」の行（合計は品目を読んでから決める）
     const names = [], prices = [];
     let afterTotal = false;
     lines.forEach((l) => {
@@ -414,6 +473,11 @@ var Engine = (function () {
       out.items = [];
       for (let i = 0; i < n; i++) { out.items.push({ name: names[start + i], price: prices[i].price, reduced: prices[i].reduced }); if (prices[i].reduced) out.hasReduced = true; }
     }
+    delete out._findTotal;
+    const itemsSum = out.items.reduce((a, it) => a + it.price, 0);
+    out.candidates = totalCandidates(lines, itemsSum);
+    out.total = out.candidates.length ? out.candidates[0].value : (itemsSum || null);
+    out.itemsSum = itemsSum;
     return out;
   }
 
