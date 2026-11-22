@@ -16,6 +16,7 @@ html[data-accent="blue"] { --accent: #2563b8; --accent-weak: #e4edf9; }
 html[data-accent="purple"] { --accent: #6d4bc2; --accent-weak: #eee8fb; }
 html[data-accent="orange"] { --accent: #c2621c; --accent-weak: #fbeee3; }
 html[data-accent="gray"] { --accent: #3d4441; --accent-weak: #e9ebea; }
+html[data-accent="pink"] { --accent: #e0367f; --accent-weak: #fde6f0; }
 
 html[data-theme="dark"] {
   --bg: #101211; --panel: #1a1d1b; --panel2: #202421; --fg: #eceeed; --muted: #9aa29d; --line: #2c312e;
@@ -26,6 +27,7 @@ html[data-theme="dark"][data-accent="green"] { --accent: #3fae84; }
 html[data-theme="dark"][data-accent="blue"] { --accent: #5b95e6; --accent-weak: #1b2638; }
 html[data-theme="dark"][data-accent="purple"] { --accent: #9b7ce8; --accent-weak: #2a2140; }
 html[data-theme="dark"][data-accent="orange"] { --accent: #e68a45; --accent-weak: #3a2718; }
+html[data-theme="dark"][data-accent="pink"] { --accent: #ff5fa2; --accent-weak: #3a1a2a; }
 html[data-theme="dark"][data-accent="gray"] { --accent: #b9c1bc; --accent-weak: #2a2f2c; --on-accent: #101211; }
 @media (prefers-color-scheme: dark) {
   html[data-theme="auto"] {
@@ -37,6 +39,7 @@ html[data-theme="dark"][data-accent="gray"] { --accent: #b9c1bc; --accent-weak: 
   html[data-theme="auto"][data-accent="blue"] { --accent: #5b95e6; --accent-weak: #1b2638; }
   html[data-theme="auto"][data-accent="purple"] { --accent: #9b7ce8; --accent-weak: #2a2140; }
   html[data-theme="auto"][data-accent="orange"] { --accent: #e68a45; --accent-weak: #3a2718; }
+  html[data-theme="auto"][data-accent="pink"] { --accent: #ff5fa2; --accent-weak: #3a1a2a; }
   html[data-theme="auto"][data-accent="gray"] { --accent: #b9c1bc; --accent-weak: #2a2f2c; --on-accent: #101211; }
 }
 html[data-density="compact"] { --gap: 0.5rem; --pad: 0.75rem; --row: 0.5rem; --radius: 0.75rem; }
@@ -223,7 +226,7 @@ textarea { resize: vertical; min-height: 4.5rem; }
 .swatches { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
 .swatch { flex: 1; height: 2.4rem; border-radius: 0.7rem; border: 2px solid transparent; color: #fff; font-weight: 700; font-size: 0.8rem; }
 .swatch.on { border-color: var(--fg); }
-.sw-green { background: #1f7a5a; } .sw-blue { background: #2563b8; } .sw-purple { background: #6d4bc2; } .sw-orange { background: #c2621c; } .sw-gray { background: #3d4441; }
+.sw-green { background: #1f7a5a; } .sw-blue { background: #2563b8; } .sw-purple { background: #6d4bc2; } .sw-orange { background: #c2621c; } .sw-gray { background: #3d4441; } .sw-pink { background: linear-gradient(135deg, #ff7ab6, #ff3d8b 45%, #a026ff); }
 
 /* ---------- 重ねて出す画面 ---------- */
 .modal { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .38); display: flex; align-items: center; justify-content: center; padding: 1rem; animation: fade .15s; }
