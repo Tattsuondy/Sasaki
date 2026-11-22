@@ -299,3 +299,7 @@ nav#nav .ver { display: block; font-size: 0.55rem; line-height: 1; letter-spacin
 .check-box.ok strong { color: var(--pos); }
 .check-box.warn { background: var(--warn-weak); }
 .check-box.warn strong { color: var(--warn); }
+
+/* いつも上に出す（固定） */
+.pin { flex-shrink: 0; width: 2.3rem; height: 2.3rem; border-radius: 0.7rem; border: 1px solid var(--line); background: var(--panel); font-size: 1rem; filter: grayscale(1); opacity: .45; }
+.pin.on { filter: none; opacity: 1; background: var(--accent-weak); border-color: var(--accent); }

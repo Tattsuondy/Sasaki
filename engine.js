@@ -168,6 +168,16 @@ var Engine = (function () {
         { k: 'active', label: '使う', type: 'bool', def: true }
       ]
     },
+    pins: {
+      sheet: '固定表示', label: 'いつも上に出す（夫・妻それぞれ）', prefix: 'pn',
+      fields: [
+        { k: 'id', type: 'id' },
+        { k: 'user', label: 'だれの設定か', type: 'select', opts: WHO, req: true },
+        { k: 'table', label: '対象', type: 'select', opts: ['wallets', 'categories'], req: true },
+        { k: 'ref', label: '口座・カード／分類', type: 'text', req: true },
+        { k: 'order', label: '並び順', type: 'int', def: 0 }
+      ]
+    },
     todos: {
       sheet: 'やること', label: 'やることリスト', prefix: 'k',
       fields: [

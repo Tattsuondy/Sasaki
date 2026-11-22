@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-22g';
-  const VERSION_LABEL = 'V.611221428';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v2-2026-11-22h';
+  const VERSION_LABEL = 'V.611221448';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -579,23 +579,23 @@
 
     // 分類（よく使う順。多いときは「ほか」でたたむ）
     if (st.type !== '振替') {
-      const ranked = rankBy(cats, usage(m, 'category'));
-      const shown = st.moreCats ? ranked : topWith(ranked, catId, 11);
+      const ranked = rankBy(cats, usage(m, 'category'), 'categories');
+      const shown = st.moreCats ? ranked : topWith(ranked, catId, 11, 'categories');
       wrap.appendChild(h('div', { class: 'cats' }, shown.map((c) => h('button', { type: 'button', class: 'cat' + (c.id === catId ? ' on' : ''), onclick: () => {
         st.cat[st.type] = c.id;
         if (st.type === '支出' && prefs.walletByCat[c.id]) st.from = prefs.walletByCat[c.id];
         refresh();
-      } }, h('span', { class: 'ci' }, c.icon || '📦'), h('span', { class: 'cn' }, c.name))),
+      } }, h('span', { class: 'ci' }, c.icon || '📦'), h('span', { class: 'cn' }, (pinsOf('categories')[c.id] ? '📌' : '') + c.name))),
       ranked.length > shown.length || st.moreCats ? h('button', { type: 'button', class: 'cat more', onclick: () => { st.moreCats = !st.moreCats; refresh(); } }, h('span', { class: 'ci' }, st.moreCats ? '−' : '＋'), h('span', { class: 'cn' }, st.moreCats ? 'たたむ' : 'ほか ' + (ranked.length - shown.length))) : null));
     }
 
     // 口座・カード（よく使う順）
     const wUse = usage(m, 'wallet');
     const chooser = (label, value, list, set, key) => {
-      const ranked = rankBy(list, wUse);
-      const shown = st['more' + key] ? ranked : topWith(ranked, value, 6);
+      const ranked = rankBy(list, wUse, 'wallets');
+      const shown = st['more' + key] ? ranked : topWith(ranked, value, 6, 'wallets');
       return h('div', { class: 'field' }, h('div', { class: 'flabel' }, label),
-        h('div', { class: 'chips wrap' }, shown.map((w) => h('button', { type: 'button', class: 'chip' + (w.id === value ? ' on' : ''), onclick: () => { set(w.id); refresh(); } }, kindIcon(w.kind), ' ', w.name)),
+        h('div', { class: 'chips wrap' }, shown.map((w) => h('button', { type: 'button', class: 'chip' + (w.id === value ? ' on' : ''), onclick: () => { set(w.id); refresh(); } }, kindIcon(w.kind), ' ', (pinsOf('wallets')[w.id] ? '📌' : '') + w.name)),
           ranked.length > shown.length || st['more' + key] ? h('button', { type: 'button', class: 'chip ghost', onclick: () => { st['more' + key] = !st['more' + key]; refresh(); } }, st['more' + key] ? 'たたむ' : 'ほか ' + (ranked.length - shown.length) + '件') : null));
     };
     if (st.type === '支出') wrap.appendChild(chooser('支払い', st.from, m.wallets, (v) => { st.from = v; }, 'F'));
@@ -660,8 +660,38 @@
     usageMemo = { key: key, v: c };
     return c;
   }
-  const rankBy = (list, cnt) => list.map((x, i) => [x, i]).sort((a, b) => ((cnt[b[0].id] || 0) - (cnt[a[0].id] || 0)) || a[1] - b[1]).map((p) => p[0]);
-  const topWith = (list, id, n) => { const top = list.slice(0, n); const sel = list.find((x) => x.id === id); if (sel && top.indexOf(sel) < 0) top.push(sel); return top; };
+  // 固定（いつも上に出す）：夫と妻で別々に持つ
+  const pinsOf = (table) => {
+    const me = S.user || (cfg && cfg.n) || '';
+    const o = {};
+    (data().pins || []).filter((p) => p.user === me && p.table === table).forEach((p) => { o[p.ref] = p; });
+    return o;
+  };
+  function togglePin(table, id) {
+    const pins = pinsOf(table);
+    if (pins[id]) { del('pins', pins[id].id); toast('固定を外しました'); }
+    else {
+      const n = Object.keys(pins).length;
+      put('pins', { id: rid('pn'), user: S.user || (cfg && cfg.n) || '', table: table, ref: id, order: n + 1 });
+      toast('いつも上に出すようにしました（' + (S.user || '') + 'の設定）');
+    }
+  }
+  // 並び：固定 → よく使う順（直近90日）→ もとの並び順
+  const rankBy = (list, cnt, table) => {
+    const pins = table ? pinsOf(table) : {};
+    return list.map((x, i) => [x, i]).sort((a, b) => {
+      const pa = pins[a[0].id], pb = pins[b[0].id];
+      if (pa || pb) { if (!pa) return 1; if (!pb) return -1; return (pa.order || 0) - (pb.order || 0); }
+      return ((cnt[b[0].id] || 0) - (cnt[a[0].id] || 0)) || a[1] - b[1];
+    }).map((p) => p[0]);
+  };
+  // 上位n件だけ出す。固定したものと、いま選んでいるものは必ず出す
+  const topWith = (list, id, n, table) => {
+    const pins = table ? pinsOf(table) : {};
+    const top = list.filter((x, i) => i < n || pins[x.id]);
+    const sel = list.find((x) => x.id === id); if (sel && top.indexOf(sel) < 0) top.push(sel);
+    return top;
+  };
 
   function frequent(m) {
     const since = E.addDays(m.today, -60), count = {};
@@ -1055,8 +1085,16 @@
     const d = data()[p.table].slice();
     const add = (preset) => push('edit', { table: p.table, id: null, preset: preset || {} });
     let list = d, groups = null;
-    if (p.table === 'wallets') { groups = [['口座', (r) => r.kind !== 'カード', { kind: '銀行' }], ['カード', (r) => r.kind === 'カード', { kind: 'カード' }]]; list.sort((a, b) => (a.order - b.order) || a.name.localeCompare(b.name, 'ja')); }
-    if (p.table === 'categories') { groups = [['支出', (r) => r.kind === '支出', { kind: '支出' }], ['収入', (r) => r.kind === '収入', { kind: '収入' }]]; list.sort((a, b) => a.order - b.order); }
+    if (p.table === 'wallets' || p.table === 'categories') {
+      // 固定（自分の設定）→ よく使う順。使っていないものは下に
+      const cnt = usage(m, p.table === 'wallets' ? 'wallet' : 'category');
+      list = rankBy(d.slice().sort((a, b) => (a.order - b.order) || String(a.name).localeCompare(String(b.name), 'ja')), cnt, p.table)
+        .sort((a, b) => (a.active === false) - (b.active === false));
+      groups = p.table === 'wallets'
+        ? [['口座', (r) => r.kind !== 'カード', { kind: '銀行' }], ['カード', (r) => r.kind === 'カード', { kind: 'カード' }]]
+        : [['支出', (r) => r.kind === '支出', { kind: '支出' }], ['収入', (r) => r.kind === '収入', { kind: '収入' }]];
+      main.appendChild(h('p', { class: 'note pad' }, '📌を押すと、いつも上に出します（' + (S.user || '自分') + 'だけの設定。もう一人には影響しません）。ほかは最近90日でよく使う順です。'));
+    }
     if (p.table === 'plans') {
       const k = tableSeg.plans || '固定費';
       main.appendChild(seg(['固定費', '収入', '振替', '年間'], k, (v) => { tableSeg.plans = v; refresh(); }));
@@ -1075,17 +1113,24 @@
     if (p.table === 'lineDest') main.appendChild(h('p', { class: 'note center' }, 'IDは、メニュー「宛先の受付を10分だけ開く」のあと「LINE宛先候補」シートに出たものを貼ります。'));
   }
 
+  function pinBtn(table, id) {
+    const on = !!pinsOf(table)[id];
+    return h('button', { type: 'button', class: 'pin' + (on ? ' on' : ''), 'aria-label': on ? '固定を外す' : 'いつも上に出す', title: on ? '固定を外す' : 'いつも上に出す',
+      onclick: (e) => { e.stopPropagation(); togglePin(table, id); } }, '📌');
+  }
   function summaryRow(table, r, m) {
     const go2 = () => push('edit', { table: table, id: r.id });
     const off = r.active === false ? '使っていない' : null;
     switch (table) {
       case 'wallets': {
         const b = r.kind !== 'カード' ? E.balances(m)[r.id] : null;
-        return row({ icon: kindIcon(r.kind), t1: r.name, tag: off || (r._pending ? '未送信' : null), tagCls: r._pending ? 'wait' : '',
+        const used = usage(m, 'wallet')[r.id] || 0;
+        return row({ icon: kindIcon(r.kind), t1: r.name, tag: off || (r._pending ? '未送信' : used ? '90日で' + used + '回' : null), tagCls: r._pending ? 'wait' : '', after: pinBtn('wallets', r.id),
           t2: r.kind === 'カード' ? [(r.closeDay === '末' ? '月末' : r.closeDay ? r.closeDay + '日' : '?') + '締め', (r.debitDay || '?') + '日払い', walletName(r.payFrom) || '引き落とし口座未設定'].join('・') : [r.kind, r.role].filter(Boolean).join('・'),
           right: b ? (b.noOpening ? h('span', { class: 'tag mid' }, '残高未入力') : amountEl(b.balance, '', { maskable: true })) : '›', onclick: go2 });
       }
-      case 'categories': return row({ icon: r.icon, t1: r.name, tag: off || (r.group !== '生活費' ? r.group.replace('（あとで戻る）', '') : null), t2: r.budget ? '予算 ' + yen(r.budget) : '', right: '›', onclick: go2 });
+      case 'categories': { const used = usage(m, 'category')[r.id] || 0;
+        return row({ icon: r.icon, t1: r.name, tag: off || (r.group !== '生活費' ? r.group.replace('（あとで戻る）', '') : null), t2: [used ? '90日で' + used + '回' : '最近は使っていない', r.budget ? '予算 ' + yen(r.budget) : ''].filter(Boolean).join('・'), right: '›', onclick: go2, after: pinBtn('categories', r.id) }); }
       case 'plans': return row({ icon: r.kind === '収入' ? '💰' : r.kind === '年間' ? '🗓' : r.kind === '振替' ? '⇄' : '🏠', t1: r.name, tag: r.active === false ? '無効' : r.reserve ? '積立' : r.inBudget === false && r.kind === '固定費' ? '生活費の外' : null,
         t2: [r.months ? r.months.split(',').join('・') + '月' : '毎月', r.day ? r.day + '日' : '', r.kind === '年間' ? (r.every === 0 ? '1回だけ' : r.every > 1 ? r.every + '年ごと' : '') : '', (walletName(r.wallet) || '口座未設定') + (r.kind === '振替' ? ' → ' + (walletName(r.to) || '未設定') : ''), r.start || r.end ? (r.start || '') + '〜' + (r.end || '') : ''].filter(Boolean).join('・'),
         right: amountEl(r.amount || 0, r.kind === '収入' ? 'pos' : ''), onclick: go2 });
