@@ -7,7 +7,7 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-21i';
+  const APP_VERSION = 'v2-2026-11-22b';
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -1299,7 +1299,7 @@
     main.appendChild(card('文字の大きさ', h('div', { class: 'slider' }, h('span', { class: 'a-small' }, 'あ'), slider, h('span', { class: 'a-big' }, 'あ'), lbl),
       h('div', { class: 'chips' }, [90, 100, 115, 130, 150].map((v) => h('button', { type: 'button', class: 'chip' + (UI.scale === v ? ' on' : ''), onclick: () => set('scale', v) }, v + '%')))));
     main.appendChild(card('画面の色', seg([['auto', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']], UI.theme, (v) => set('theme', v)),
-      h('div', { class: 'swatches' }, [['green', '緑'], ['blue', '青'], ['purple', '紫'], ['orange', '橙'], ['gray', '灰']].map(([k, l]) => h('button', { type: 'button', class: 'swatch sw-' + k + (UI.accent === k ? ' on' : ''), 'aria-label': l, onclick: () => set('accent', k) }, l)))));
+      h('div', { class: 'swatches' }, [['pink', 'ピンク'], ['green', '緑'], ['blue', '青'], ['purple', '紫'], ['orange', '橙'], ['gray', '灰']].map(([k, l]) => h('button', { type: 'button', class: 'swatch sw-' + k + (UI.accent === k ? ' on' : ''), 'aria-label': l, onclick: () => set('accent', k) }, l)))));
     main.appendChild(card('表示の詰め具合', seg([['roomy', 'ゆったり'], ['normal', '標準'], ['compact', 'コンパクト']], UI.density, (v) => set('density', v))));
     main.appendChild(card('金額の書き方', seg([['suffix', '1,234円'], ['prefix', '¥1,234']], UI.yen, (v) => set('yen', v)),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: UI.mask, onchange: (e) => set('mask', e.target.checked) }), h('span', null, '残高を隠す（人前で開くとき。ホームの「隠す」と同じ）'))));
@@ -1422,7 +1422,7 @@
       const cats = m.categories.filter((c) => c.kind === '支出');
       const byName = (n) => (cats.find((c) => c.name === n) || {}).id || '';
       const defaults = { food: prefs.rcFood || byName('食費') || (cats[0] || {}).id || '', other: prefs.rcOther || byName('日用品') || byName('食費') || '' };
-      const parsed = E.classifyReceipt(E.parseReceipt(res.text || '', m.today), m.data.rules || [], defaults);
+      const parsed = E.classifyReceipt(E.parseReceipt(res.text || '', m.today), m.data.rules || [], defaults, byName);
       if (!parsed.items.length && !parsed.total) { toast('文字を読み取れませんでした。明るい場所で、レシート全体がまっすぐ入るように撮ってください。', { error: true, long: true }); return; }
       push('receipt', { parsed: parsed, text: res.text || '', defaults: defaults, from: st.from });
       toast('読み取りました。分け方を確かめて登録してください');
@@ -1477,11 +1477,13 @@
     const sum = h('div');
     const drawSum = () => {
       clear(sum);
-      const parts = E.splitByCategory(S2.items, Number(S2.total) || 0);
+      const parts = E.splitByCategory(S2.items, Number(S2.total) || 0, pr.taxExcluded, Number(S2.total) === pr.total ? pr.rates : null);
       const itemsTotal = S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0);
       parts.forEach((x) => { const c = catOf(x.category); sum.appendChild(row({ icon: c ? c.icon : '・', t1: c ? c.name : '分類なし', t2: '品目の計 ' + yen(x.items), right: amountEl(-x.amount) })); });
       if (!parts.length) sum.appendChild(empty('品目がありません'));
-      sum.appendChild(h('p', { class: 'note' }, '品目の合計 ' + yen(itemsTotal) + (S2.total ? '／レシートの合計 ' + yen(S2.total) + '。差（税・値引きなど）は、分類ごとの金額の割合で分けています。' : '')));
+      const usedRates = Number(S2.total) === pr.total && pr.rates;
+      sum.appendChild(h('p', { class: 'note' }, '品目の合計 ' + yen(itemsTotal) + (S2.total ? '／レシートの合計 ' + yen(S2.total) + '。' +
+        (usedRates ? 'レシートの税率ごとの金額（8%：' + yen(pr.rates[8]) + '・10%：' + yen(pr.rates[10]) + '）に合わせて分けています。' : '差（税・値引きなど）は、分類ごとの金額の割合で分けています。') : '')));
     };
     drawSum();
     main.appendChild(card('登録される記録', sum,
@@ -1489,7 +1491,7 @@
 
     const save = (oneLine) => {
       try {
-        const parts = oneLine ? [{ category: p.defaults.food, amount: Number(S2.total) || S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0) }] : E.splitByCategory(S2.items, Number(S2.total) || 0);
+        const parts = oneLine ? [{ category: p.defaults.food, amount: Number(S2.total) || S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0) }] : E.splitByCategory(S2.items, Number(S2.total) || 0, pr.taxExcluded, Number(S2.total) === pr.total ? pr.rates : null);
         if (!parts.length || parts.some((x) => !(x.amount > 0))) throw new Error('金額が正しくありません。合計か品目の金額を確かめてください。');
         if (!S2.from) throw new Error('支払い（口座・カード）を選んでください。');
         const ref = rid('rc');

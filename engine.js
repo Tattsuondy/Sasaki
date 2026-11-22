@@ -404,12 +404,19 @@ var Engine = (function () {
     if (itemsSum > 0 && !Object.keys(cands).length) add(itemsSum, 1, '品目の合計');
     return Object.keys(cands).map((k) => cands[k]).sort((a, b) => b.score - a.score || b.value - a.value).slice(0, 6);
   }
-  const SKIP = /(合計|小計|総計|お買上|お買い上げ|お預|預り|預かり|釣|おつり|お釣|税|対象|ポイント|点数|クレジット|カード|電子マネー|PayPay|残高|支払|現金|領収|レジ|担当|TEL|電話|No\.|伝票|会員|ありがとう|株式会社|〒|登録番号|値引前)/i;
-  const PRICE = /[¥]?\s*(-?\d{1,3}(?:,\d{3})+|-?\d{1,6})\s*円?\s*([※*軽外内]|\(軽\)|\(8%\)|\(10%\))?\s*$/;
+  // 品目の行ではないもの（店の案内・支払い・税の内訳など）
+  const SKIP = /(合計|小計|総計|お買上|お買い上げ|お預|預り|預かり|釣|おつり|お釣|消費税|税額|税抜|税込|内税|外税|課税|税率\s*\d|\d+(?:\.\d)?%\s*対象|対象額|対象割引|[都道府県].*[市区町村郡]|[市区町村].*\d+-\d+|ポイント|点数|クレジット|電子マネー|PayPay|nanaco|WAON|Suica|残高|支払|現金|領収|レジ|担当|TEL|電話|☎|No[.\-:：]|伝票|会員|ありがとう|株式会社|〒|登録番号|値引前|お取替|返品|保管|募集|アプリ|検索|通販|ご案内|発行者|取引|店内|持帰|テイクアウト|^[-=*_~\s]+$)/i;
+  // 「品名 … 金額」の金額の部分。金額の前の「*」「※」（軽減税率の印）や、後ろの「※」「外」「J」などの印も受け付ける
+  const PRICE = /[*※＊]?\s*(-?\s*¥?\s*\d{1,3}(?:,\d{3})+|-?\s*¥?\s*\d{1,6})\s*円?\s*([※*＊軽外内A-Z]|\(軽\)|\(8%\)|\(10%\))?\s*$/;
+  // 数量の行：「(¥154 X 3個)」「(@100 × 2個)」「(2個¥100 × 1組)」「¥130 2個 ¥260」
+  const QTY = /^[(（]?\s*(?:\d+\s*個\s*)?[¥@]?\s*[\d,]+\s*(?:[xX×*]\s*\d+\s*(?:個|点|コ|本|組|袋|枚)?|\s+\d+\s*(?:個|点|コ|本|組|袋|枚))\s*[)）]?(?:\s*¥?\s*([\d,]+))?\s*$/;
+  // 売り場・部門の番号（「551+」「#010」「100E」など）
+  const DEPT = /^([#＃])?\s*\d{2,4}(?:[+＋]\s*|[EＥ]\s+|\s+)/;
+  const REDUCED = /([※*＊]|\(軽|（軽|\(8%\)|軽減)/;
 
   /**
    * レシートの文字から、店名・日付・合計・品目を取り出す
-   * 戻り値 { store, date, total, items:[{name, price, reduced}], hasReduced }
+   * 戻り値 { store, date, total, items:[{name, price, reduced}], hasReduced, candidates, itemsSum }
    */
   function parseReceipt(text, today) {
     const lines = normText(text).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
@@ -426,73 +433,115 @@ var Engine = (function () {
         if (d && (!today || d <= today)) { out.date = d; break; }
       }
     }
-    // 合計（「小計」より「合計」を優先。お預り・お釣りは除く）
-    const amountIn = (l) => { const m = /(-?\d{1,3}(?:,\d{3})+|-?\d{1,7})(?!.*\d)/.exec(l.replace(/[¥円\s]/g, (c) => (c === ' ' ? ' ' : ''))); return m ? Number(m[1].replace(/,/g, '')) : null; };
-    const findTotal = (re) => {
-      for (let i = 0; i < lines.length; i++) {
-        if (!re.test(lines[i]) || /(お預|預り|釣|対象|税額|内税|外税|消費税|点数)/.test(lines[i])) continue;
-        let v = amountIn(lines[i].replace(re, ''));
-        if ((v === null || v === 0) && lines[i + 1] && !/[ぁ-んァ-ン一-龥]/.test(lines[i + 1])) v = amountIn(lines[i + 1]);
-        if (v !== null && v > 0) return v;
-      }
-      return null;
-    };
-    out._findTotal = findTotal;   // 旧方式（使わない）
-    // 店名：最初の、数字だらけでない行
-    for (const l of lines.slice(0, 6)) {
-      if (/^(領収書|レシート|receipt)$/i.test(l) || /\d{2,}[-\d]{6,}/.test(l) || /(TEL|電話|〒|住所|登録番号)/i.test(l)) continue;
-      const letters = l.replace(/[\d\s¥,.:\-\/()]/g, '');
-      if (letters.length >= 2) { out.store = l.slice(0, 40); break; }
-    }
-    // 品目：「品名 … 金額」の行（合計は品目を読んでから決める）
+    // 店名：上のほうの「ブランド名」と「〇〇店」を組み合わせる（案内文・電話・住所は飛ばす）
+    const NOISE = /(お取替|返品|保管|領\s*収|レシート|receipt|公式|アプリ|募集|検索|通販|〒|登録番号|ありがとう|いらっしゃい|ご来店|担当|レジ|\*{2,}|[都道府県].*[市区町村]|[市区町村].*\d+-\d+|^[\s\-=*_~<>()（）【】#]+$|^#?\d)/i;
+    const head = lines.slice(0, 12).map((l) => l.replace(/\s*(☎|TEL|Tel|電話)\s*[:：]?\s*[\d-]{8,}.*$/, '').replace(/\s*\d{2,4}-\d{2,4}-\d{3,4}\s*$/, '').trim())
+      .filter((l) => l && !NOISE.test(l) && !/(20\d{2}|令和)\s*[年\/]/.test(l) && l.replace(/[\d\s¥,.:\-\/()]/g, '').length >= 2);
+    let bi = head.findIndex((l) => /店\s*$|店\s|店舗/.test(l));
+    let branch = bi >= 0 ? head[bi] : '';
+    if (branch && bi > 0 && /^.{1,3}店$/.test(branch)) { branch = head[bi - 1] + branch; bi--; }   // 「…鎌ケ」「谷店」と2行に分かれたとき
+    const brand = head.find((l, i) => i !== bi && i < (bi < 0 ? 99 : bi) + 1 && !/店\s*$/.test(l) && !/\d{4}/.test(l)) || '';
+    out.store = (branch && branch.length >= 9 ? branch : brand && branch && branch.indexOf(brand) < 0 ? brand + ' ' + branch : (branch || brand)).slice(0, 40);
+
+    // 品目
     const names = [], prices = [];
-    let afterTotal = false;
-    lines.forEach((l) => {
-      if (/(合計|小計|お買上)/.test(l)) afterTotal = true;
-      if (afterTotal || SKIP.test(l)) return;
-      if (/\d{1,2}:\d{2}/.test(l) || /(20\d{2}|令和|R\d)\s*[年\/.]/.test(l) || /^\d{2}\/\d{1,2}\/\d{1,2}/.test(l)) return;   // 日付・時刻の行
+    let afterTotal = false, pending = null;   // pending … 金額がまだ出ていない品名（次の行に金額や数量が来る形）
+    let nameRun = 0;                           // 品名だけの行が続いた数（2行以上続くと、2列が別々に読まれた形）
+    const push = (name, price, reduced) => {
+      name = name.replace(/[¥*※＊\s]+$/, '').replace(/^[*※＊☆★\s]+/, '').trim().slice(0, 40);
+      if (!name || name.replace(/[\d\s.,%¥()（）@×xX-]/g, '').length < 1 || !price || Math.abs(price) >= 1000000) return false;
+      out.items.push({ name: name, price: price, reduced: !!reduced });
+      if (reduced) out.hasReduced = true;
+      return true;
+    };
+    lines.forEach((raw) => {
+      if (/(^|\s)(小\s*計|合\s*計|お買上|お買い上げ|お会計)/.test(raw)) afterTotal = true;
+      if (afterTotal) return;
+      if (/\d{1,2}:\d{2}/.test(raw) || /(20\d{2}|令和|R\d)\s*[年\/.]/.test(raw)) { pending = null; return; }   // 日付・時刻
+      // 数量の行
+      const q = QTY.exec(raw);
+      if (q) {
+        if (pending && q[1]) { push(pending.name, Number(q[1].replace(/,/g, '')), pending.reduced); pending = null; }
+        return;
+      }
+      if (SKIP.test(raw)) { pending = null; return; }
+      const dept = DEPT.exec(raw);
+      const deptReduced = !!(dept && dept[1]);
+      const l = dept ? raw.slice(dept[0].length) : raw;
       const m = PRICE.exec(l);
-      const reduced = /([※*軽]|\(軽\)|\(8%\))/.test(l);
+      const reduced = deptReduced || REDUCED.test(l);
       if (m) {
-        const name = l.slice(0, m.index).replace(/[¥\s]+$/, '').replace(/^\d{4,}\s*/, '').replace(/\s*\d+\s*(個|点|コ)\s*[x×*@]?\s*\d*\s*$/, '').trim();
-        const price = Number(m[1].replace(/,/g, ''));
-        if (/(値引|割引|クーポン|OFF|引)/i.test(name) && out.items.length) { out.items[out.items.length - 1].price -= Math.abs(price); return; }
-        if (name.replace(/[\d\s.,%-]/g, '').length >= 1 && price !== 0 && Math.abs(price) < 1000000) {
-          out.items.push({ name: name.slice(0, 40), price: price, reduced: reduced });
-          if (reduced) out.hasReduced = true;
+        const name = l.slice(0, m.index).trim();
+        const price = Number(m[1].replace(/[\s¥,]/g, ''));
+        // 値引き・割引は、直前の品目から引く
+        if (/(値引|割引|引き|クーポン|OFF|▲)/i.test(name)) { if (out.items.length) out.items[out.items.length - 1].price -= Math.abs(price); pending = null; return; }
+        if (name && push(name, price, reduced)) { pending = null; nameRun = 0; return; }
+        if (!name && price > 0) {
+          if (pending) { push(pending.name, price, pending.reduced || reduced); pending = null; }
+          else prices.push({ price: price, reduced: reduced });
           return;
         }
-        if (!name && price > 0) { prices.push({ price: price, reduced: reduced }); return; }
       }
-      if (/[ぁ-んァ-ン一-龥A-Za-z]{2,}/.test(l) && !/\d{3,}/.test(l)) names.push(l.slice(0, 40));
+      if (/[ぁ-んァ-ン一-龥A-Za-z]{2,}/.test(l) && !/\d{5,}/.test(l)) {
+        const nm = l.replace(/\s+[A-Z]$/, '');
+        nameRun++;
+        pending = nameRun === 1 ? { name: nm, reduced: reduced } : null;
+        names.push({ name: nm, reduced: reduced });
+        return;
+      }
+      nameRun = 0;
     });
-    // 品名と金額が別々の行に分かれて読まれたとき：順番に組み合わせる
-    if (out.items.length < 2 && names.length >= 2 && prices.length >= 2) {
+    // 品名と金額が別々のまとまりで読まれたとき（2列が別々に読まれた）：後ろから順番に組み合わせる
+    if (prices.length >= 2 && out.items.length < prices.length) {
       const n = Math.min(names.length, prices.length);
       const start = names.length - n;
-      out.items = [];
-      for (let i = 0; i < n; i++) { out.items.push({ name: names[start + i], price: prices[i].price, reduced: prices[i].reduced }); if (prices[i].reduced) out.hasReduced = true; }
+      const extra = [];
+      for (let i = 0; i < n; i++) extra.push({ name: names[start + i].name, price: prices[i].price, reduced: prices[i].reduced || names[start + i].reduced });
+      if (extra.length > out.items.length) { out.items = []; out.hasReduced = false; extra.forEach((x) => push(x.name, x.price, x.reduced)); }
     }
-    delete out._findTotal;
     const itemsSum = out.items.reduce((a, it) => a + it.price, 0);
     out.candidates = totalCandidates(lines, itemsSum);
     out.total = out.candidates.length ? out.candidates[0].value : (itemsSum || null);
     out.itemsSum = itemsSum;
+    // 税率ごとの金額（「8%対象額」「10%対象」など）。合計と合えば、分類の分け方にそのまま使う
+    const rate = { 8: null, 10: null }, base = { 8: null, 10: null }, tax = { 8: null, 10: null };
+    const lastNum = (l) => { const m = /(-?\d{1,3}(?:,\d{3})+|-?\d{1,7})\s*\)?\s*$/.exec(l.replace(/[¥円]/g, '')); return m ? Number(m[1].replace(/,/g, '')) : null; };
+    lines.forEach((l) => {
+      const r = /(?:^|\D)(8|10)(?:\.0)?\s*%/.exec(l) ? (/(?:^|\D)8(?:\.0)?\s*%/.test(l) ? 8 : 10) : (/標準税率/.test(l) ? 10 : /軽減/.test(l) ? 8 : null);
+      if (!r || /割引/.test(l)) return;
+      const v = lastNum(l);
+      if (v === null) return;
+      if (/税抜/.test(l) && /対象/.test(l)) base[r] = v;
+      else if (/(税額|消費税)/.test(l) && !/対象/.test(l)) tax[r] = v;
+      else if (/対象/.test(l)) rate[r] = v;
+    });
+    [8, 10].forEach((r) => { if (base[r] !== null) rate[r] = base[r] + (tax[r] || 0); });
+    const rs = (rate[8] || 0) + (rate[10] || 0);
+    out.rates = out.total && rs && Math.abs(rs - out.total) <= 2 ? { 8: rate[8] || 0, 10: rate[10] || 0 } : null;
+    // 税抜きの値段が並ぶレシート（小計＋税＝合計）かどうか
+    const w = out.items.reduce((a, it) => a + it.price * (it.reduced ? 1.08 : 1.1), 0);
+    out.taxExcluded = out.total && itemsSum && Math.abs(w - out.total) < Math.abs(itemsSum - out.total) && out.total > itemsSum;
     return out;
   }
 
+  // ルールに当たらないときに使う、よくある品名（ユーザーのルールが先に当たる）
+  const BUILTIN = [
+    ['お酒', 'ビール,発泡酒,チューハイ,酎ハイ,ハイボール,サワー,ワイン,焼酎,日本酒,清酒,ウイスキー,ウィスキー,梅酒,リキュール,スーパードライ,一番搾り,黒ラベル,プレミアムモルツ,プレモル,金麦,のどごし,本麒麟,クリアアサヒ,淡麗,スタイルフリー,麦とホップ,ホワイトベルグ,ストロング,氷結,ほろよい,本搾り,こだわり酒場,角瓶,角ハイ,ブラックニッカ,トリス,鏡月,いいちこ,黒霧島,檸檬堂,ジムビーム,翠,レモンサワー,GFサワー,ハイネケン,コロナ,ヱビス,エビス,マッコリ,紹興酒'],
+    ['日用品', 'トイレット,ティッシュ,洗剤,柔軟剤,漂白,シャンプー,リンス,コンディショナー,ボディソープ,ハンドソープ,歯磨,ハミガキ,歯ブラシ,ラップ,アルミホイル,ゴミ袋,ポリ袋,キッチンペーパー,スポンジ,電池,マスク,綿棒,おむつ,オムツ,生理,消臭,芳香,殺虫,入浴剤,カミソリ,ウェット,除菌,ハンガー,収納,フック,テープ']
+  ];
+
   /**
-   * 品目を分類に振り分け、合計に合わせて分類ごとの金額を出す
-   * rules: [{keyword, category, order, active}]、defaults: { food: 分類ID, other: 分類ID }
+   * 品目を分類に振り分ける
+   * rules: [{keyword, category, order, active}]、defaults: { food: 分類ID, other: 分類ID }、catIdByName: 名前→分類ID
    */
-  function classifyReceipt(parsed, rules, defaults) {
-    const rs = (rules || []).filter((r) => r.active !== false && r.keyword && r.category).sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
+  function classifyReceipt(parsed, rules, defaults, catIdByName) {
+    const toKeys = (kw) => String(kw).split(/[,、]/).map((k) => normText(k).trim().toLowerCase()).filter(Boolean);
+    const rs = (rules || []).filter((r) => r.active !== false && r.keyword && r.category).sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
+      .map((r) => ({ keys: toKeys(r.keyword), category: r.category }));
+    if (catIdByName) BUILTIN.forEach(([name, kw]) => { const id = catIdByName(name); if (id) rs.push({ keys: toKeys(kw), category: id }); });
     const hit = (name) => {
       const n = normText(name).toLowerCase();
-      for (const r of rs) {
-        const keys = String(r.keyword).split(/[,、]/).map((k) => normText(k).trim().toLowerCase()).filter(Boolean);
-        if (keys.some((k) => n.indexOf(k) >= 0)) return r.category;
-      }
+      for (const r of rs) if (r.keys.some((k) => n.indexOf(k) >= 0)) return r.category;
       return '';
     };
     const items = parsed.items.map((it) => {
@@ -503,18 +552,37 @@ var Engine = (function () {
     return Object.assign({}, parsed, { items: items });
   }
 
-  /** 分類ごとに合計し、レシートの合計（税・値引き込み）に合わせて按分する */
-  function splitByCategory(items, total) {
-    const sums = {};
-    items.forEach((it) => { if (it.category) sums[it.category] = (sums[it.category] || 0) + (Number(it.price) || 0); });
+  /**
+   * 分類ごとに合計し、レシートの合計（税・値引き込み）に合わせて分ける。
+   * 税抜きの値段のレシートでは、軽減税率（8%）と標準（10%）の違いも考えて分ける。
+   */
+  function splitByCategory(items, total, taxExcluded, rates) {
+    // 税率ごとの金額がわかるとき：8%の品目と10%の品目に分けて、それぞれの金額を分類で分ける（いちばん正確）
+    if (rates && items.length) {
+      const g8 = items.filter((it) => it.reduced), g10 = items.filter((it) => !it.reduced);
+      const okG = (g, v) => (v > 0 ? g.reduce((a, it) => a + (Number(it.price) || 0), 0) > 0 : true);
+      if (okG(g8, rates[8]) && okG(g10, rates[10])) {
+        const parts = {};
+        [[g8, rates[8]], [g10, rates[10]]].forEach(([g, v]) => { if (v > 0 && g.length) splitByCategory(g, v, false).forEach((x) => { parts[x.category] = parts[x.category] || { category: x.category, items: 0, amount: 0 }; parts[x.category].items += x.items; parts[x.category].amount += x.amount; }); });
+        return Object.keys(parts).map((k) => parts[k]).sort((a, b) => b.amount - a.amount);
+      }
+    }
+    const sums = {}, weights = {};
+    items.forEach((it) => {
+      if (!it.category) return;
+      const p = Number(it.price) || 0;
+      sums[it.category] = (sums[it.category] || 0) + p;
+      weights[it.category] = (weights[it.category] || 0) + (taxExcluded ? p * (it.reduced ? 1.08 : 1.1) : p);
+    });
     const keys = Object.keys(sums).filter((k) => sums[k] !== 0);
+    const W = keys.reduce((a, k) => a + weights[k], 0);
     const S = keys.reduce((a, k) => a + sums[k], 0);
-    const T = total && total > 0 ? total : S;
-    if (!S) return [];
+    const T = total && total > 0 ? total : Math.round(taxExcluded ? W : S);
+    if (!W) return [];
     let used = 0;
-    const big = keys.slice().sort((a, b) => sums[b] - sums[a]);
+    const big = keys.slice().sort((a, b) => weights[b] - weights[a]);
     const out = big.map((k, i) => {
-      const v = i === big.length - 1 ? T - used : Math.round(sums[k] * T / S);
+      const v = i === big.length - 1 ? T - used : Math.round(weights[k] * T / W);
       used += v;
       return { category: k, items: sums[k], amount: v };
     });
