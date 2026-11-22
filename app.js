@@ -7,7 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-22b';
+  const APP_VERSION = 'v2-2026-11-22e';
+  const VERSION_LABEL = 'V.611221357';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -283,6 +284,7 @@
     if (p) window.scrollTo(0, p.scroll || 0);
   }
   document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.tab)));
+  { const mb = document.querySelector('#nav [data-tab=manage]'); if (mb) mb.appendChild(h('span', { class: 'ver' }, VERSION_LABEL)); }
 
   // refresh() … 操作したときの描き直し。refresh(true) … 裏の同期による描き直し（入力中は待つ）
   let refreshQueued = false, refreshSoft = true;
@@ -1362,7 +1364,7 @@
       h('p', null, '口座や分類がまだ1件もありません。スプレッドシートを開いて、メニュー「家計簿 > 初期設定（旧データの引き継ぎ）」を実行してください。'),
       h('p', { class: 'note' }, 'メニューが出ないときは、スプレッドシートを開き直してください。実行が終わったら、下のボタンで読み直します。'),
       h('div', { class: 'diag' }, h('div', { class: 'flabel' }, '原因調べ用の情報'),
-        h('div', { class: 'bd' }, h('span', null, '画面の版'), h('span', null, APP_VERSION)),
+        h('div', { class: 'bd' }, h('span', null, '画面の版'), h('span', null, VERSION_LABEL + '（' + APP_VERSION + '）')),
         h('div', { class: 'bd' }, h('span', null, 'GASの版'), h('span', null, S.code || '—')),
         h('div', { class: 'bd' }, h('span', null, '受け取ったデータ'), h('span', null, S.got || '—')),
         h('div', { class: 'bd' }, h('span', null, '前回の通信'), h('span', null, S.error || '成功'))),
@@ -1424,7 +1426,7 @@
       const defaults = { food: prefs.rcFood || byName('食費') || (cats[0] || {}).id || '', other: prefs.rcOther || byName('日用品') || byName('食費') || '' };
       const parsed = E.classifyReceipt(E.parseReceipt(res.text || '', m.today), m.data.rules || [], defaults, byName);
       if (!parsed.items.length && !parsed.total) { toast('文字を読み取れませんでした。明るい場所で、レシート全体がまっすぐ入るように撮ってください。', { error: true, long: true }); return; }
-      push('receipt', { parsed: parsed, text: res.text || '', defaults: defaults, from: st.from });
+      push('receipt', { parsed: parsed, text: res.text || '', defaults: defaults, from: st.from, engine: res.engine || 'drive', used: res.used, limit: res.limit, note: res.note || '' });
       toast('読み取りました。分け方を確かめて登録してください');
     } catch (e) { toast('読み取れませんでした：' + e.message, { error: true, long: true }); }
     finally { S.mode = ''; setStatus(); }
@@ -1454,7 +1456,8 @@
         onclick: (e) => { S2.total = c.value; total.value = c.value.toLocaleString('ja-JP'); candBox.querySelectorAll('.chip').forEach((x) => x.classList.toggle('on', x === e.currentTarget)); mark(); } },
         yen(c.value) + '（' + c.why[0] + '）')))) : null;
     main.appendChild(card(null, fieldWrap('店名（メモになります）', store), h('div', { class: 'grid2' }, fieldWrap('日付', date), fieldWrap('レシートの合計（円）', total)), candBox, fieldWrap('支払い', wsel),
-      !pr.total ? h('p', { class: 'note warn' }, '合計を読み取れませんでした。レシートの合計を入れてください（空欄なら品目の合計を使います）。') : null));
+      !pr.total ? h('p', { class: 'note warn' }, '合計を読み取れませんでした。レシートの合計を入れてください（空欄なら品目の合計を使います）。') : null,
+      h('p', { class: 'note' + (p.note ? ' warn' : '') }, p.engine === 'vision' ? '読み取り：Cloud Vision（今月 ' + p.used + '／上限 ' + p.limit + '回）' : (p.note || '読み取り：Googleドライブ'))));
 
     // 品目
     const list = h('div');
@@ -1516,7 +1519,9 @@
       h('button', { type: 'button', onclick: back }, 'やめる'),
       h('button', { type: 'button', onclick: () => save(true) }, 'まとめて1件で登録'),
       h('button', { type: 'button', class: 'primary', onclick: () => save(false) }, '分けて登録')));
-    main.appendChild(h('details', { class: 'raw' }, h('summary', null, '読み取った文字を見る'), h('pre', null, p.text || '（なし）')));
+    main.appendChild(h('details', { class: 'raw' }, h('summary', null, '読み取った文字を見る'),
+      h('button', { type: 'button', class: 'sbtn', onclick: async () => { try { await navigator.clipboard.writeText(p.text || ''); toast('読み取った文字をコピーしました'); } catch (e) { toast('コピーできませんでした。文字を長押しして選んでください', { error: true }); } } }, '文字をコピー'),
+      h('pre', null, p.text || '（なし）')));
   }
 
   /* ================= やることリスト ================= */
