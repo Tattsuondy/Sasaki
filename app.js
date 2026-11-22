@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-22e';
-  const VERSION_LABEL = 'V.611221357';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v2-2026-11-22g';
+  const VERSION_LABEL = 'V.611221428';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -1484,6 +1484,10 @@
       const itemsTotal = S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0);
       parts.forEach((x) => { const c = catOf(x.category); sum.appendChild(row({ icon: c ? c.icon : '・', t1: c ? c.name : '分類なし', t2: '品目の計 ' + yen(x.items), right: amountEl(-x.amount) })); });
       if (!parts.length) sum.appendChild(empty('品目がありません'));
+      // 答え合わせ（品目の合計 ＝ 小計？）
+      const chk = E.checkReceipt(S2.items, Number(S2.total) || 0, Number(S2.total) === pr.total ? pr.subtotal : null, pr.taxExcluded);
+      S2.check = chk;
+      sum.appendChild(h('div', { class: 'check-box ' + chk.level }, h('strong', null, chk.ok ? '✓ 答え合わせOK' : '⚠ 合計が合っていません'), h('span', null, chk.text)));
       const usedRates = Number(S2.total) === pr.total && pr.rates;
       sum.appendChild(h('p', { class: 'note' }, '品目の合計 ' + yen(itemsTotal) + (S2.total ? '／レシートの合計 ' + yen(S2.total) + '。' +
         (usedRates ? 'レシートの税率ごとの金額（8%：' + yen(pr.rates[8]) + '・10%：' + yen(pr.rates[10]) + '）に合わせて分けています。' : '差（税・値引きなど）は、分類ごとの金額の割合で分けています。') : '')));
@@ -1492,7 +1496,11 @@
     main.appendChild(card('登録される記録', sum,
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S2.learn, onchange: (e) => { S2.learn = e.target.checked; } }), h('span', null, '変えた分類を覚えて、次から自動で分ける'))));
 
-    const save = (oneLine) => {
+    const save = async (oneLine) => {
+      if (!oneLine && S2.check && !S2.check.ok) {
+        const a = await ask('合計が合っていません', S2.check.text + '\nこのまま登録すると、差の分は分類ごとの割合で振り分けられます。', [{ v: 'go', label: 'このまま登録する', primary: true }, { v: 'back', label: '戻って直す' }]);
+        if (a !== 'go') return false;
+      }
       try {
         const parts = oneLine ? [{ category: p.defaults.food, amount: Number(S2.total) || S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0) }] : E.splitByCategory(S2.items, Number(S2.total) || 0, pr.taxExcluded, Number(S2.total) === pr.total ? pr.rates : null);
         if (!parts.length || parts.some((x) => !(x.amount > 0))) throw new Error('金額が正しくありません。合計か品目の金額を確かめてください。');
