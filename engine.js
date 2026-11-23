@@ -61,7 +61,12 @@ var Engine = (function () {
         { k: 'user', label: '入力者', type: 'select', opts: WHO },
         { k: 'settle', label: '精算', type: 'select', opts: ['', '未精算', '精算済'] },
         { k: 'ref', label: '予定との対応', type: 'text', ro: true },
-        { k: 'created', label: '登録日時', type: 'datetime', ro: true }
+        { k: 'created', label: '登録日時', type: 'datetime', ro: true },
+        // 外貨（ドル）で入れた記録。計算は「金額（円）」で行い、ドルの金額とレートは記録として残す
+        { k: 'cur', label: '通貨', type: 'select', opts: ['', 'USD'] },
+        { k: 'famt', label: '外貨の金額（ドル）', type: 'dec', dp: 2, fmt: '#,##0.00' },
+        { k: 'fx', label: 'レート（1ドル＝円）', type: 'dec', dp: 4, fmt: '0.00##' },
+        { k: 'fxAt', label: 'レートの時点', type: 'text' }
       ]
     },
     bills: {
@@ -202,7 +207,10 @@ var Engine = (function () {
     if (!row || typeof row !== 'object') throw new Error('入力が正しくありません。');
     const out = {};
     sc.fields.forEach((f) => { out[f.k] = cleanField(f, row[f.k], row); });
-    if (table === 'tx') checkTx(out);
+    if (table === 'tx') {
+      if (!out.cur) { out.famt = ''; out.fx = ''; out.fxAt = ''; }
+      checkTx(out);
+    }
     if (table === 'plans' && out.kind === '振替' && (!out.wallet || !out.to || out.wallet === out.to)) throw new Error('振替の予定は、移す元と移す先を別々に選んでください。');
     if (table === 'wallets' && out.kind === 'カード' && !out.payFrom) { /* 引き落とし口座は後から入れてもよい */ }
     return out;
@@ -230,6 +238,13 @@ var Engine = (function () {
         if (!isFinite(n) || Math.abs(n) > 1e10) bad('は数字で入れてください。');
         if (f.type === 'int' && n < 0) bad('はマイナスにできません。');
         return Math.round(n);
+      }
+      case 'dec': {   // 小数（ドルの金額・レート）
+        if (s === '') return '';
+        const n = Number(s.replace(/[,，$＄円¥\s]/g, ''));
+        if (!isFinite(n) || n < 0 || n > 1e9) bad('は0以上の数字で入れてください。');
+        const k = Math.pow(10, f.dp === undefined ? 2 : f.dp);
+        return Math.round(n * k) / k;
       }
       case 'date': {
         if (s === '') return '';
@@ -290,7 +305,19 @@ var Engine = (function () {
     if (t.type === '収入' && !t.to) throw new Error('入れ先（口座）を選んでください。');
     if (t.type === '振替' && (!t.from || !t.to || t.from === t.to)) throw new Error('振替は、移す元と先を別々に選んでください。');
     if (t.type === '残高合わせ' && !t.to) throw new Error('口座を選んでください。');
+    if (t.cur) {
+      if (t.type === '残高合わせ') throw new Error('残高合わせは円で入れてください。');
+      if (!(t.famt > 0)) throw new Error('ドルの金額を入れてください。');
+      if (!(t.fx > 0)) throw new Error('ドルのレートを入れてください。');
+    }
   }
+  /** 外貨の金額 × レート → 円（1円未満は四捨五入） */
+  function fxYen(famt, fx) {
+    const a = Number(famt), r = Number(fx);
+    if (!(a > 0) || !(r > 0)) return 0;
+    return Math.round(Math.round(a * 100) * r / 100 + 1e-9);
+  }
+  function usd(n) { return '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
   /* ================= 日付 ================= */
   function pad(n) { return (n < 10 ? '0' : '') + n; }
@@ -1051,7 +1078,8 @@ var Engine = (function () {
     isAccount: isAccount, isCard: isCard, build: build, cycleOf: cycleOf, bills: bills, cardStatus: cardStatus, balances: balances,
     planOccurs: planOccurs, planRef: planRef, occurrences: occurrences, nextOccurrence: nextOccurrence, projection: projection,
     month: month, tatekaeOpen: tatekaeOpen, annual: annual, bonusView: bonusView, alerts: alerts,
-    yen: yen, md: md, afterText: afterText, normText: normText, parseReceipt: parseReceipt, classifyReceipt: classifyReceipt, checkReceipt: checkReceipt, splitByCategory: splitByCategory
+    yen: yen, md: md, afterText: afterText, normText: normText, parseReceipt: parseReceipt, classifyReceipt: classifyReceipt, checkReceipt: checkReceipt, splitByCategory: splitByCategory,
+    fxYen: fxYen, usd: usd
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

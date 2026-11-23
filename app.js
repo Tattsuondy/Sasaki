@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-22h';
-  const VERSION_LABEL = 'V.611221448';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v2-2026-11-23a';
+  const VERSION_LABEL = 'V.611231217';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -519,19 +519,38 @@
   }
 
   /* ================= 入力 ================= */
-  const st = { type: '支出', amount: '', cat: { '支出': '', '収入': '' }, from: '', to: '', date: '', memo: '', settle: false };
+  const st = { type: '支出', amount: '', cat: { '支出': '', '収入': '' }, from: '', to: '', date: '', memo: '', settle: false, cur: 'JPY', usd: '', fxManual: '', fxEdit: false };
+
+  // ドルのレート（GASが GOOGLEFINANCE で調べる。10分間は同じ値を使う。取れないときは前回の値か手入力）
+  const FX = { usd: store.get('kakeibo.fx', null), busy: false, err: '' };
+  let fxLineDraw = null;
+  async function loadFx(force) {
+    if (FX.busy || !cfg) return;
+    if (!force && FX.usd && Date.now() - (FX.usd.got || 0) < 10 * 60 * 1000) return;
+    FX.busy = true; FX.err = ''; if (fxLineDraw) fxLineDraw();
+    try {
+      const r = await post({ action: 'fx', cur: 'USD' });
+      FX.usd = { rate: Number(r.rate), at: r.at, got: Date.now() };
+      store.set('kakeibo.fx', FX.usd);
+    } catch (e) { FX.err = e.message || '通信できませんでした'; }
+    FX.busy = false;
+    if (fxLineDraw) fxLineDraw();
+  }
+  const fxRate = () => Number(String(st.fxManual).replace(/[,\s円]/g, '')) > 0 ? Number(String(st.fxManual).replace(/[,\s円]/g, '')) : (FX.usd ? FX.usd.rate : 0);
+  const usdText = (s2) => { const p2 = String(s2 || '').split('.'); return (p2[0] ? Number(p2[0]).toLocaleString('en-US') : '0') + (p2.length > 1 ? '.' + p2[1] : ''); };
+  const mdhm = (s2) => s2 ? (+s2.slice(5, 7)) + '/' + (+s2.slice(8, 10)) + ' ' + s2.slice(11, 16) : '';
   // 前の版の設定が残っていても動くように、足りないものは補う
   const prefs = Object.assign({ walletByCat: {}, lastFrom: '', lastTo: '', lastIncomeTo: '' }, store.get('kakeibo.pref', {}));
   if (!prefs.walletByCat || typeof prefs.walletByCat !== 'object') prefs.walletByCat = {};
   const savePrefs = () => store.set('kakeibo.pref', prefs);
 
-  function inputDirty() { return !!st.amount; }
+  function inputDirty() { return !!st.amount || !!st.usd; }
 
   function inputPage(main) {
     const m = model();
     if (!st.date) st.date = m.today;
     R.guard = { dirty: inputDirty, title: '入力中の内容があります', text: '登録してから移動しますか？', saveLabel: '登録する',
-      save: () => saveInput(true), drop: () => { st.amount = ''; st.memo = ''; } };
+      save: () => saveInput(true), drop: () => { st.amount = ''; st.usd = ''; st.memo = ''; } };
 
     const cats = m.categories.filter((c) => c.kind === (st.type === '収入' ? '収入' : '支出'));
     if (st.type !== '振替' && !cats.some((c) => c.id === st.cat[st.type]) && cats.length) st.cat[st.type] = cats[0].id;
@@ -559,17 +578,59 @@
         (catOf(f.cat) || {}).icon || '', ' ', (catOf(f.cat) || {}).name || '', '・', walletName(f.from), f.memo ? '・' + f.memo : ''))));
     }
 
-    // 金額
-    const amt = h('div', { class: 'amount' + (st.amount ? '' : ' zero') }, h('span', { class: 'cur' }, UI.yen === 'prefix' ? '¥' : ''), h('span', { class: 'num' }, st.amount ? Number(st.amount).toLocaleString('ja-JP') : '0'), h('span', { class: 'cur' }, UI.yen === 'prefix' ? '' : '円'));
-    wrap.appendChild(h('div', { class: 'amount-box' }, amt));
-    wrap.appendChild(keypad((k) => {
-      if (k === 'del') st.amount = st.amount.slice(0, -1);
-      else if (k === 'clr') st.amount = '';
-      else if ((st.amount + k).length <= 9) st.amount = (st.amount === '' && (k === '0' || k === '00')) ? '' : st.amount + k;
-      const n = amt.querySelector('.num');
-      n.textContent = st.amount ? Number(st.amount).toLocaleString('ja-JP') : '0';
-      amt.classList.toggle('zero', !st.amount);
-    }));
+    // 金額（円 か ドル）
+    wrap.appendChild(seg([['JPY', '¥ 円'], ['USD', '$ ドル']], st.cur, (v) => { st.cur = v; st.amount = ''; st.usd = ''; st.fxEdit = false; if (v === 'USD') loadFx(false); refresh(); }, 'cur-seg'));
+    if (st.cur === 'USD') {
+      if (!FX.usd || Date.now() - (FX.usd.got || 0) > 10 * 60 * 1000) loadFx(false);
+      const amt = h('div', { class: 'amount' + (st.usd ? '' : ' zero') }, h('span', { class: 'cur' }, '$'), h('span', { class: 'num' }, usdText(st.usd)));
+      const line = h('div', { class: 'fx-line' });
+      const draw = () => {
+        clear(line);
+        const r = fxRate();
+        const yenV = E.fxYen(Number(st.usd), r);
+        line.appendChild(h('div', { class: 'fx-yen' }, r ? '≈ ' + yen(yenV) : (FX.busy ? 'レートを調べています…' : 'レートがまだありません')));
+        const info = r ? '1ドル ＝ ' + r.toLocaleString('ja-JP', { maximumFractionDigits: 4 }) + '円' + (st.fxManual ? '（手入力）' : FX.usd ? '（' + mdhm(FX.usd.at) + ' 時点' + (Date.now() - (FX.usd.got || 0) > 10 * 60 * 1000 ? '・前回取ったレート' : '') + '）' : '') : '';
+        line.appendChild(h('div', { class: 'fx-info' }, info, FX.busy && r ? '　更新中…' : '', FX.err ? h('span', { class: 'neg' }, '　' + FX.err) : null));
+        if (st.date && st.date !== model().today && !st.fxManual) line.appendChild(h('div', { class: 'note warn' }, '今のレートです（' + md(st.date) + ' のレートではありません）。その日のレートで記録したいときは「レートを変える」で入れてください。'));
+        if (st.fxEdit) {
+          const inp = h('input', { type: 'text', inputmode: 'decimal', class: 'fx-input', placeholder: '例：154.25', value: st.fxManual || (r ? String(r) : ''), 'aria-label': '1ドルの円', oninput: (e) => { st.fxManual = e.target.value; const r2 = fxRate(); line.querySelector('.fx-yen').textContent = r2 ? '≈ ' + yen(E.fxYen(Number(st.usd), r2)) : 'レートを入れてください'; } });
+          line.appendChild(h('div', { class: 'fx-edit' }, h('span', null, '1ドル ＝'), inp, h('span', null, '円'),
+            h('button', { type: 'button', class: 'chip', onclick: () => { st.fxEdit = false; draw(); } }, '決定')));
+        }
+        line.appendChild(h('div', { class: 'chips' },
+          h('button', { type: 'button', class: 'chip', onclick: () => { st.fxEdit = !st.fxEdit; draw(); } }, st.fxEdit ? '閉じる' : 'レートを変える'),
+          st.fxManual ? h('button', { type: 'button', class: 'chip', onclick: () => { st.fxManual = ''; st.fxEdit = false; draw(); } }, '今のレートに戻す') : null,
+          h('button', { type: 'button', class: 'chip', disabled: FX.busy ? 'disabled' : null, onclick: () => { st.fxManual = ''; loadFx(true); } }, '最新のレートを取る')));
+      };
+      fxLineDraw = draw; draw();
+      wrap.appendChild(h('div', { class: 'amount-box' }, amt, line));
+      wrap.appendChild(keypad((k) => {
+        let v = st.usd;
+        if (k === 'del') v = v.slice(0, -1);
+        else if (k === 'clr') v = '';
+        else if (k === '.') { if (v.indexOf('.') < 0) v = (v || '0') + '.'; }
+        else if (v.length < 10 && !(/\.\d\d$/.test(v))) v = (v === '0' ? '' : v) + k;
+        if (v === '00' || v === '0') v = v === '0' ? '0' : '';
+        st.usd = v;
+        amt.querySelector('.num').textContent = usdText(st.usd);
+        amt.classList.toggle('zero', !st.usd);
+        const r = fxRate(); const y = line.querySelector('.fx-yen'); if (y && r) y.textContent = '≈ ' + yen(E.fxYen(Number(st.usd), r));
+      }, true));
+      const fw = m.w[st.from];
+      if (st.type === '支出' && fw && E.isCard(fw)) wrap.appendChild(h('p', { class: 'note' }, 'カードの海外利用は、カード会社のレートと手数料で請求額が少し変わります。請求が確定したら、明細でこの記録の「金額（円）」を直せます（ドルの金額はそのまま残ります）。'));
+    } else {
+      fxLineDraw = null;
+      const amt = h('div', { class: 'amount' + (st.amount ? '' : ' zero') }, h('span', { class: 'cur' }, UI.yen === 'prefix' ? '¥' : ''), h('span', { class: 'num' }, st.amount ? Number(st.amount).toLocaleString('ja-JP') : '0'), h('span', { class: 'cur' }, UI.yen === 'prefix' ? '' : '円'));
+      wrap.appendChild(h('div', { class: 'amount-box' }, amt));
+      wrap.appendChild(keypad((k) => {
+        if (k === 'del') st.amount = st.amount.slice(0, -1);
+        else if (k === 'clr') st.amount = '';
+        else if ((st.amount + k).length <= 9) st.amount = (st.amount === '' && (k === '0' || k === '00')) ? '' : st.amount + k;
+        const n = amt.querySelector('.num');
+        n.textContent = st.amount ? Number(st.amount).toLocaleString('ja-JP') : '0';
+        amt.classList.toggle('zero', !st.amount);
+      }));
+    }
 
     // 日付
     const dates = [[m.today, '今日'], [E.addDays(m.today, -1), '昨日'], [E.addDays(m.today, -2), 'おととい']];
@@ -620,26 +681,35 @@
     wrap.appendChild(h('button', { type: 'button', class: 'save-btn', onclick: () => saveInput(false) }, '登録する'));
   }
 
-  function keypad(onKey) {
-    const rows = UI.keypad === 'phone' ? [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['00', '0', 'del']] : [['7', '8', '9'], ['4', '5', '6'], ['1', '2', '3'], ['00', '0', 'del']];
+  function keypad(onKey, decimal) {
+    const z = decimal ? '.' : '00';   // ドルのときは「00」の代わりに小数点
+    const rows = UI.keypad === 'phone' ? [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], [z, '0', 'del']] : [['7', '8', '9'], ['4', '5', '6'], ['1', '2', '3'], [z, '0', 'del']];
     return h('div', { class: 'keypad' }, rows.flat().map((k) => h('button', { type: 'button', class: 'key' + (k === 'del' ? ' fn' : ''), 'aria-label': k === 'del' ? '1文字消す' : k,
       onclick: () => onKey(k), oncontextmenu: (e) => { if (k === 'del') { e.preventDefault(); onKey('clr'); } } }, k === 'del' ? '⌫' : k)));
   }
 
   function saveInput(fromGuard) {
     const m = model();
-    const amount = Number(st.amount);
+    const isUsd = st.cur === 'USD';
+    let amount = Number(st.amount);
+    const famt = isUsd ? Number(st.usd) : 0, r = isUsd ? fxRate() : 0;
+    if (isUsd) {
+      if (!(famt > 0)) { toast('ドルの金額を入れてください', { error: true }); return false; }
+      if (!(r > 0)) { toast('レートが取れていません。「レートを変える」で1ドルの円を入れてください', { error: true }); return false; }
+      amount = E.fxYen(famt, r);
+    }
     if (!amount) { toast('金額を入れてください', { error: true }); return false; }
     const t = { id: rid('t'), date: st.date || m.today, type: st.type, amount: amount, category: st.type === '振替' ? '' : st.cat[st.type],
-      from: st.type === '収入' ? '' : st.from, to: st.type === '支出' ? '' : st.to, memo: st.memo.trim(), user: S.user || (cfg && cfg.n) || '', settle: '', ref: '', created: nowStr() };
+      from: st.type === '収入' ? '' : st.from, to: st.type === '支出' ? '' : st.to, memo: st.memo.trim(), user: S.user || (cfg && cfg.n) || '', settle: '', ref: '', created: nowStr(),
+      cur: isUsd ? 'USD' : '', famt: isUsd ? famt : '', fx: isUsd ? r : '', fxAt: isUsd ? (st.fxManual ? '手入力' : (FX.usd && FX.usd.at) || '') : '' };
     const c = catOf(t.category);
     if (st.type === '支出' && c && c.group === '立替（あとで戻る）') t.settle = '未精算';
     try { put('tx', t); } catch (e) { toast(e.message, { error: true }); return false; }
     if (st.type === '支出') { prefs.walletByCat[t.category] = t.from; prefs.lastFrom = t.from; }
     if (st.type === '収入') prefs.lastIncomeTo = t.to;
     savePrefs();
-    st.amount = ''; st.memo = '';
-    toast((c ? c.name + ' ' : '') + yen(amount) + ' を登録しました', { undo: () => { del('tx', t.id); toast('取り消しました'); } });
+    st.amount = ''; st.usd = ''; st.memo = '';
+    toast((c ? c.name + ' ' : '') + (isUsd ? E.usd(famt) + '（' + yen(amount) + '）' : yen(amount)) + ' を登録しました', { undo: () => { del('tx', t.id); toast('取り消しました'); } });
     if (!fromGuard) {
       if (UI.afterSave === 'home') go('home'); else refresh();
     }
@@ -794,11 +864,11 @@
   let shownList = [];
   function exportCsv(list, ym) {
     const q = (v) => '"' + String(v === null || v === undefined ? '' : v).replace(/"/g, '""') + '"';
-    const lines = [['日付', '種類', '金額', '分類', '出どころ', '入れ先', 'メモ', '入力者', '精算', '登録日時'].map(q).join(',')];
+    const lines = [['日付', '種類', '金額', '分類', '出どころ', '入れ先', 'メモ', '入力者', '精算', '登録日時', '通貨', 'ドルの金額', 'レート'].map(q).join(',')];
     list.slice().sort((a, b) => (a.date + a.created).localeCompare(b.date + b.created)).forEach((t) => {
       // 表計算ソフトで数式として動かないよう、= + - @ で始まる文字は ' を付ける
       const safe = (v) => /^[=+\-@]/.test(String(v)) && typeof v === 'string' ? "'" + v : v;
-      lines.push([t.date, t.type, t.amount, safe((catOf(t.category) || {}).name || ''), safe(walletName(t.from)), safe(walletName(t.to)), safe(t.memo), t.user, t.settle, t.created].map(q).join(','));
+      lines.push([t.date, t.type, t.amount, safe((catOf(t.category) || {}).name || ''), safe(walletName(t.from)), safe(walletName(t.to)), safe(t.memo), t.user, t.settle, t.created, t.cur || '', t.famt === undefined ? '' : t.famt, t.fx === undefined ? '' : t.fx].map(q).join(','));
     });
     const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const a = h('a', { href: URL.createObjectURL(blob), download: '家計簿_' + ym + '.csv' });
@@ -815,7 +885,10 @@
     return row({ icon: t.type === '振替' ? '⇄' : t.type === '残高合わせ' ? '⚖️' : (c ? c.icon : '・'), t1: title, t2: t2,
       tag: t._pending ? '未送信' : t.settle === '未精算' ? '未精算' : t.settle === '精算済' ? '精算済' : t.ref ? '予定' : null,
       tagCls: t._pending ? 'wait' : t.settle === '未精算' ? 'mid' : '',
-      right: amountEl(t.type === '残高合わせ' ? t.amount : t.type === '振替' ? t.amount : sign * t.amount, sign > 0 ? 'pos' : t.type === '振替' ? 'mute' : '', { plus: sign > 0 || t.type === '残高合わせ' }),
+      right: (() => {
+        const a = amountEl(t.type === '残高合わせ' ? t.amount : t.type === '振替' ? t.amount : sign * t.amount, sign > 0 ? 'pos' : t.type === '振替' ? 'mute' : '', { plus: sign > 0 || t.type === '残高合わせ' });
+        return t.cur === 'USD' && t.famt ? h('span', { class: 'col' }, a, h('span', { class: 'after' }, E.usd(t.famt) + '・' + Number(t.fx).toLocaleString('ja-JP', { maximumFractionDigits: 2 }) + '円')) : a;
+      })(),
       onclick: () => push('edit', { table: 'tx', id: t.id }) });
   }
 
@@ -1148,13 +1221,14 @@
   /* ---------- 1行の編集（表の形から自動で作る） ---------- */
   const HIDE = {
     wallets: (f, v) => (f.only === 'card' && v.kind !== 'カード') || (f.only === 'account' && v.kind === 'カード') || f.k === 'openingAt',
-    tx: (f, v) => (f.k === 'from' && (v.type === '収入' || v.type === '残高合わせ')) || (f.k === 'to' && v.type === '支出') || (f.k === 'category' && (v.type === '振替' || v.type === '残高合わせ')) || f.k === 'created' || f.k === 'ref',
+    tx: (f, v) => (f.k === 'from' && (v.type === '収入' || v.type === '残高合わせ')) || (f.k === 'to' && v.type === '支出') || (f.k === 'category' && (v.type === '振替' || v.type === '残高合わせ')) || f.k === 'created' || f.k === 'ref' ||
+      ((f.k === 'famt' || f.k === 'fx') && !v.cur) || f.k === 'fxAt' || (f.k === 'cur' && v.type === '残高合わせ'),
     allocs: (f, v) => f.k === 'category' && !!v.to,
     plans: (f, v) => (f.k === 'every' && v.kind !== '年間') || (f.k === 'reserve' && v.kind !== '年間') || (f.k === 'inBudget' && (v.kind === '収入' || v.kind === '振替')) ||
       (f.k === 'to' && v.kind !== '振替') || (f.k === 'category' && v.kind === '振替')
   };
   const FIELD_LABEL = {
-    tx: { from: (v) => v.type === '振替' ? '移す元' : '支払い元', to: (v) => v.type === '振替' ? '移す先' : '入金先・口座' },
+    tx: { from: (v) => v.type === '振替' ? '移す元' : '支払い元', to: (v) => v.type === '振替' ? '移す先' : '入金先・口座', cur: () => '通貨（空＝円。ドルで払ったものは USD）' },
     plans: { wallet: (v) => v.kind === '収入' ? '入金先' : v.kind === '振替' ? '移す元' : '支払い元（口座・カード）', to: () => '移す先' }
   };
 
@@ -1178,6 +1252,7 @@
       clear(form);
       if (p.table === 'wallets' && v.kind !== 'カード') form.appendChild(h('p', { class: 'note' }, '開始残高は「今」の残高です。入れた日時より後の記録で、残高を計算します。'));
       if (p.table === 'tx' && v.ref) form.appendChild(h('p', { class: 'note' }, '予定（固定費・年間・ボーナス配分など）から記録したものです。削除すると、予定は「未記録」に戻ります。'));
+      if (p.table === 'tx' && v.cur === 'USD') form.appendChild(h('p', { class: 'note' }, 'ドルで入れた記録です' + (v.fxAt ? '（レート：' + (v.fxAt === '手入力' ? '手入力' : v.fxAt + ' 時点') + '）' : '') + '。ドルの金額かレートを変えると、円の金額を計算し直します。カードの請求額に合わせたいときは、円の金額だけを直してください。'));
       // 振替の予定は「移す元」のすぐ下に「移す先」を出す
       const fields = sc.fields.slice();
       if (p.table === 'plans') { const ti = fields.findIndex((f) => f.k === 'to'); const tf = fields.splice(ti, 1)[0]; fields.splice(fields.findIndex((f) => f.k === 'wallet') + 1, 0, tf); }
@@ -1187,7 +1262,15 @@
         const lab = FIELD_LABEL[p.table] && FIELD_LABEL[p.table][f.k] ? FIELD_LABEL[p.table][f.k](v) : f.label;
         if (f.ro || (f.type === 'id')) { form.appendChild(fieldWrap(lab, h('div', { class: 'ro' }, String(v[f.k] === '' ? '—' : v[f.k])))); return; }
         const el = fieldInput(f, v[f.k], v, p.table, m);
-        el.addEventListener('change', () => { v[f.k] = readInput(f, el); if (['kind', 'type', 'to'].indexOf(f.k) >= 0) draw(); });
+        el.addEventListener('change', () => {
+          v[f.k] = readInput(f, el);
+          if (p.table === 'tx' && (f.k === 'famt' || f.k === 'fx') && v.cur) {
+            const y = E.fxYen(v.famt, v.fx);
+            if (y) { v.amount = y; if (inputs.amount) inputs.amount.value = y.toLocaleString('ja-JP'); }
+            if (f.k === 'fx') v.fxAt = '手入力';
+          }
+          if (['kind', 'type', 'to', 'cur'].indexOf(f.k) >= 0) draw();
+        });
         el.addEventListener('input', () => { v[f.k] = readInput(f, el); });
         inputs[f.k] = el;
         form.appendChild(f.type === 'bool' ? h('label', { class: 'check' }, el, h('span', null, lab)) : fieldWrap(lab + (f.req ? '（必須）' : ''), el));
@@ -1274,6 +1357,7 @@
       case 'month': return h('input', { type: 'month', value: s, placeholder: '2029-08' });
       case 'longtext': return h('textarea', { rows: '3', maxlength: '1000' }, s);
       case 'int': case 'sint': return h('input', { type: 'text', inputmode: f.type === 'sint' ? 'text' : 'numeric', value: s === '' ? '' : Number(s).toLocaleString('ja-JP'), autocomplete: 'off' });
+      case 'dec': return h('input', { type: 'text', inputmode: 'decimal', value: s, autocomplete: 'off' });
       case 'day': return h('input', { type: 'text', inputmode: 'numeric', value: s, placeholder: '1〜31' });
       case 'close': return h('input', { type: 'text', value: s, placeholder: '5 または 末' });
       case 'months': return h('input', { type: 'text', value: s, placeholder: '例 6,12（空欄は毎月）' });
@@ -1284,6 +1368,7 @@
   function readInput(f, el) {
     if (f.type === 'bool') return el.checked;
     if (f.type === 'int' || f.type === 'sint') { const t = el.value.replace(/[,，円¥\s]/g, '').replace(/^−/, '-'); return t === '' ? '' : (isFinite(Number(t)) ? Number(t) : el.value); }
+    if (f.type === 'dec') { const t = el.value.replace(/[,，円¥$＄\s]/g, ''); return t === '' ? '' : (isFinite(Number(t)) ? Number(t) : el.value); }
     return el.value;
   }
   function num(s, signed, soft) {
