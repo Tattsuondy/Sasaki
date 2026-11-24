@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-23a';
-  const VERSION_LABEL = 'V.611231217';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v2-2026-11-24b';
+  const VERSION_LABEL = 'V.611241751';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -567,8 +567,9 @@
     if (st.type === '支出') {
       const file = h('input', { type: 'file', accept: 'image/*', class: 'hidden', onchange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) readReceipt(f); } });
       wrap.appendChild(h('div', { class: 'receipt-bar' }, file,
-        h('button', { type: 'button', class: 'receipt-btn', onclick: () => file.click() }, '📷 レシートを読み取る'),
-        h('span', { class: 'note' }, 'お酒・日用品などに自動で分けます')));
+        h('button', { type: 'button', class: 'receipt-btn', onclick: () => file.click() }, '📷 レシート'),
+        h('button', { type: 'button', class: 'receipt-btn', onclick: () => push('fare', {}) }, '🚃 交通費'),
+        h('span', { class: 'note' }, 'レシートは品目ごとに分類、交通費は乗換案内で運賃を調べて入力')));
     }
 
     // よく使う組み合わせ
@@ -788,6 +789,11 @@
   let listYm = '', listFilter = 'all', listQuery = '', listView = 'days';
   function listPage(main) {
     const m = model();
+    if (listView === 'sum') {
+      main.appendChild(seg([['days', '日ごと'], ['cats', '分類ごと'], ['sum', '期間集計']], listView, (v) => { listView = v; refresh(); }));
+      sumView(main, m);
+      return;
+    }
     if (!listYm) listYm = E.ymOf(m.today);
     const s = E.month(m, listYm);
     main.appendChild(h('div', { class: 'month-nav' },
@@ -799,7 +805,7 @@
       h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '収入'), h('div', { class: 'v pos' }, yen(s.income))),
       h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '生活費／予算'), h('div', { class: 'v' }, yen(s.household) + (s.budget ? ' / ' + yen(s.budget) : '')))),
       s.budget ? bar(s.household / s.budget, s.household > s.budget) : null));
-    main.appendChild(seg([['days', '日ごと'], ['cats', '分類ごと']], listView, (v) => { listView = v; refresh(); }));
+    main.appendChild(seg([['days', '日ごと'], ['cats', '分類ごと'], ['sum', '期間集計']], listView, (v) => { listView = v; refresh(); }));
 
     if (listView === 'cats') {
       const max = Math.max(1, ...s.expenseCats.map((c) => Math.max(c.total, c.budget || 0)));
@@ -859,6 +865,119 @@
       });
     };
     refreshList();
+  }
+
+  /* ---------- 期間集計（好きな期間で、分類ごと・支払いごと・お店ごとに合計） ---------- */
+  const SUM = { preset: 'thisMonth', from: '', to: '', user: '', open: '', more: false };
+  function sumRange(m) {
+    const t = m.today, ym = E.ymOf(t), y = +t.slice(0, 4);
+    const endOf = (ym2) => ym2 + '-' + E.pad(E.dimOf(ym2));
+    switch (SUM.preset) {
+      case 'lastMonth': { const p = E.addMonths(ym, -1); return [p + '-01', endOf(p)]; }
+      case '3m': return [E.addMonths(ym, -2) + '-01', t];
+      case '6m': return [E.addMonths(ym, -5) + '-01', t];
+      case 'thisYear': return [y + '-01-01', t];
+      case 'lastYear': return [(y - 1) + '-01-01', (y - 1) + '-12-31'];
+      case 'custom': return [SUM.from || ym + '-01', SUM.to || t];
+      default: return [ym + '-01', t];
+    }
+  }
+  // くらべる期間：同じ長さだけ前（「先月」なら先々月、「今年」なら去年の同じ時期）
+  function sumPrev(from, to) {
+    if (SUM.preset === 'thisYear' || SUM.preset === 'lastYear') return [(+from.slice(0, 4) - 1) + from.slice(4), (+to.slice(0, 4) - 1) + to.slice(4)];
+    if (SUM.preset === 'thisMonth') { const p = E.addMonths(E.ymOf(from), -1); const d = Math.min(+to.slice(8, 10), E.dimOf(p)); return [p + '-01', p + '-' + E.pad(d)]; }
+    if (SUM.preset === 'lastMonth') { const p = E.addMonths(E.ymOf(from), -1); return [p + '-01', p + '-' + E.pad(E.dimOf(p))]; }
+    // 月の初日〜月末で区切った期間は、同じ月数だけ前の月とくらべる（10/1〜10/31 → 9/1〜9/30）
+    const endOf = (ym2) => ym2 + '-' + E.pad(E.dimOf(ym2));
+    if (from.slice(8) === '01' && to === endOf(E.ymOf(to))) {
+      let n = 0; for (let ym = E.ymOf(from); ym <= E.ymOf(to); ym = E.addMonths(ym, 1)) n++;
+      return [E.addMonths(E.ymOf(from), -n) + '-01', endOf(E.addMonths(E.ymOf(to), -n))];
+    }
+    const n = E.diffDays(from, to) + 1;
+    return [E.addDays(from, -n), E.addDays(from, -1)];
+  }
+  function sumView(main, m) {
+    const presets = [['thisMonth', '今月'], ['lastMonth', '先月'], ['3m', '3か月'], ['6m', '半年'], ['thisYear', '今年'], ['lastYear', '去年'], ['custom', '期間を指定']];
+    main.appendChild(h('div', { class: 'chips scroll' }, presets.map(([v, l]) => h('button', { type: 'button', class: 'chip' + (SUM.preset === v ? ' on' : ''), onclick: () => {
+      if (v === 'custom' && SUM.preset !== 'custom') { const r = sumRange(m); SUM.from = r[0]; SUM.to = r[1]; }
+      SUM.preset = v; SUM.open = ''; refresh(); } }, l))));
+    if (SUM.preset === 'custom') {
+      const d1 = h('input', { type: 'date', value: SUM.from, onchange: (e) => { if (e.target.value) { SUM.from = e.target.value; refresh(); } } });
+      const d2 = h('input', { type: 'date', value: SUM.to, onchange: (e) => { if (e.target.value) { SUM.to = e.target.value; refresh(); } } });
+      main.appendChild(h('div', { class: 'sum-dates' }, d1, h('span', null, '〜'), d2));
+    }
+    main.appendChild(seg([['', 'ふたり'], ['夫', '夫の入力'], ['妻', '妻の入力']], SUM.user, (v) => { SUM.user = v; refresh(); }));
+    let [from, to] = sumRange(m);
+    if (from > to) { const x = from; from = to; to = x; }
+    const s2 = E.summary(m, from, to, { user: SUM.user });
+    const [pf, pt] = sumPrev(from, to);
+    const prev = E.summary(m, pf, pt, { user: SUM.user });
+    const prevCat = {}; prev.expenseCats.forEach((c) => { prevCat[c.id] = c.total; });
+    const perMonth = (n) => s2.monthsLen >= 1.5 ? yen(Math.round(n / s2.monthsLen)) : null;
+    const diff = (now, before) => {
+      if (!before && !now) return null;
+      const d = now - before;
+      return h('span', { class: 'diff ' + (d > 0 ? 'up' : d < 0 ? 'down' : '') }, d === 0 ? '前と同じ' : (d > 0 ? '▲' : '▼') + yen(Math.abs(d)).replace('-', ''));
+    };
+    const fmt = (d) => (+d.slice(0, 4) !== +m.today.slice(0, 4) ? d.slice(0, 4) + '/' : '') + md(d);
+
+    main.appendChild(card(fmt(from) + ' 〜 ' + fmt(to) + '（' + s2.days + '日）',
+      h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, '支出の合計'), h('div', { class: 'big' }, yen(s2.expense))),
+        h('div', { class: 'r' }, h('div', { class: 'lbl' }, '前の期間（' + fmt(pf) + '〜' + fmt(pt) + '）'), h('div', { class: 'v' }, yen(prev.expense)), diff(s2.expense, prev.expense))),
+      h('div', { class: 'grid3' },
+        h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '生活費'), h('div', { class: 'v' }, yen(s2.household))),
+        h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '立替'), h('div', { class: 'v' }, yen(s2.tatekae))),
+        h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '収入'), h('div', { class: 'v pos' }, yen(s2.income)))),
+      s2.monthsLen >= 1.5 ? h('p', { class: 'note' }, '月の平均：支出 ' + perMonth(s2.expense) + '・生活費 ' + perMonth(s2.household)) : null,
+      s2.outside ? h('p', { class: 'note' }, '生活費の外（ボーナスからの支払いなど）：' + yen(s2.outside)) : null));
+
+    // 分類ごと
+    const max = Math.max(1, ...s2.expenseCats.map((c) => c.total));
+    const catRows = s2.expenseCats.map((c) => {
+      const key = c.id || 'none';
+      const open = SUM.open === key;
+      const pct = s2.expense ? Math.round(c.total / s2.expense * 1000) / 10 : 0;
+      const head = h('button', { type: 'button', class: 'catbar tap' + (open ? ' open' : ''), onclick: () => { SUM.open = open ? '' : key; SUM.more = false; refresh(); } },
+        h('div', { class: 'top' }, h('span', null, (c.icon || '') + ' ' + c.name, c.group !== '生活費' ? h('span', { class: 'tag' }, c.group === '生活費の外' ? '生活費の外' : '立替') : null),
+          h('span', { class: 'amt' }, yen(c.total))),
+        bar(c.total / max),
+        h('div', { class: 'sub' }, h('span', null, pct + '%・' + c.count + '件' + (perMonth(c.total) ? '・月 ' + perMonth(c.total) : '')), diff(c.total, prevCat[c.id] || 0)));
+      if (!open) return head;
+      // 開いたとき：月ごとの金額と、記録の一覧
+      const mm = s2.months.length > 1 ? h('div', { class: 'month-bars' }, s2.months.map((ym) => {
+        const v = c.byMonth[ym] || 0, mx = Math.max(1, ...s2.months.map((x) => c.byMonth[x] || 0));
+        return h('div', { class: 'mb' }, h('span', { class: 'ml' }, (+ym.slice(5)) + '月'), bar(v / mx), h('span', { class: 'mv' }, yen(v)));
+      })) : null;
+      const shown = SUM.more ? c.tx : c.tx.slice(0, 20);
+      return h('div', { class: 'cat-open' }, head, mm, h('div', { class: 'cat-tx' }, shown.map((t) => txRow(t))),
+        c.tx.length > shown.length ? h('button', { type: 'button', class: 'link', onclick: () => { SUM.more = true; refresh(); } }, 'ほか ' + (c.tx.length - shown.length) + '件を表示') : null);
+    });
+    main.appendChild(card('分類ごとの支出（押すと中身）', catRows.length ? catRows : empty('この期間の支出はありません')));
+    if (s2.incomeCats.length) main.appendChild(card('収入（分類ごと）', s2.incomeCats.map((c) => row({ icon: c.icon, t1: c.name, t2: c.count + '件', right: amountEl(c.total, 'pos') }))));
+
+    // 支払いごと・入力者ごと・お店（メモ）ごと
+    const wl = Object.keys(s2.byWallet).sort((a, b) => s2.byWallet[b] - s2.byWallet[a]);
+    if (wl.length) main.appendChild(card('支払いごと', wl.map((id) => { const w = rowOf('wallets', id); return row({ icon: kindIcon(w && w.kind), t1: walletName(id) || '不明', right: amountEl(s2.byWallet[id]) }); })));
+    const ul = Object.keys(s2.byUser);
+    if (!SUM.user && ul.length > 1) main.appendChild(card('入力した人ごと', ul.map((u) => row({ t1: u, right: amountEl(s2.byUser[u]) }))));
+    if (s2.byMemo.length) main.appendChild(card('お店・メモごと（上位10）', s2.byMemo.slice(0, 10).map((b) => row({ t1: b.memo, t2: b.count + '回', right: amountEl(b.total) }))));
+
+    main.appendChild(h('div', { class: 'form-acts pad' },
+      h('button', { type: 'button', onclick: () => exportSummary(s2, prev) }, '集計をCSVで書き出す'),
+      h('button', { type: 'button', onclick: () => exportCsv(s2.tx, from + '_' + to) }, 'この期間の記録をCSV')));
+  }
+  function exportSummary(s2, prev) {
+    const q = (v) => '"' + String(v === null || v === undefined ? '' : v).replace(/"/g, '""') + '"';
+    const safe = (v) => /^[=+\-@]/.test(String(v)) ? "'" + v : v;
+    const pc = {}; prev.expenseCats.forEach((c) => { pc[c.id] = c.total; });
+    const lines = [['分類', 'グループ', '件数', '合計', '割合(%)', '前の期間', '差'].concat(s2.months).map(q).join(',')];
+    s2.expenseCats.forEach((c) => lines.push([safe(c.name), c.group, c.count, c.total, s2.expense ? Math.round(c.total / s2.expense * 1000) / 10 : 0, pc[c.id] || 0, c.total - (pc[c.id] || 0)]
+      .concat(s2.months.map((ym) => c.byMonth[ym] || 0)).map(q).join(',')));
+    lines.push(['支出の合計', '', s2.count, s2.expense, 100, prev.expense, s2.expense - prev.expense].concat(s2.months.map((ym) => (s2.byMonth[ym] || {}).expense || 0)).map(q).join(','));
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = h('a', { href: URL.createObjectURL(blob), download: '家計簿_集計_' + s2.from + '_' + s2.to + '.csv' });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
   let shownList = [];
@@ -1132,6 +1251,7 @@
       item('🧾', '開始残高', '口座ごとに、今の残高を入れる', () => push('opening')),
       item('💳', 'カードの請求', '請求額の確定・引き落とし不可', () => push('bills')),
       item('🗂', '分類と予算', m.categories.length + '件', () => push('table', { table: 'categories' })),
+      item('🚃', '交通費の区間・定期券', ((data().routes || []).length) + '区間・定期 ' + ((data().passes || []).length) + '枚', () => push('fare', {})),
       item('🧾', 'レシートの読み取りルール', (m.data.rules || []).length + '件（品名の文字で分類を決める）', () => push('table', { table: 'rules' }))));
     main.appendChild(card('予定',
       item('🏠', '固定費・収入・年間の予定', m.plansAll.length + '件', () => push('table', { table: 'plans' })),
@@ -1213,6 +1333,8 @@
       case 'notifyTpl': return row({ icon: r.enabled ? '💬' : '🔕', t1: r.id + '. ' + r.text, tag: r.level, tagCls: levelCls[r.level], t2: '送り先：' + r.to + '・' + r.type, right: '›', onclick: go2 });
       case 'notifyConf': return row({ t1: r.id, right: h('span', { class: 'tag' }, r.value), onclick: go2 });
       case 'rules': { const c = catOf(r.category); return row({ icon: c ? c.icon : '・', t1: (c ? c.name : '分類なし') + '　←　' + r.keyword.slice(0, 40) + (r.keyword.length > 40 ? '…' : ''), tag: r.active === false ? '使わない' : null, right: '›', onclick: go2 }); }
+      case 'passes': { const ex = r.end && r.end < m.today; return row({ icon: '🎫', t1: r.user + '：' + r.name, tag: ex ? '期限切れ' : null, tagCls: ex ? 'mid' : '', t2: r.route + (r.end ? '・期限 ' + r.end.replace(/-/g, '/') : ''), right: '›', onclick: go2 }); }
+      case 'routes': return row({ icon: '🚃', t1: r.from + ' → ' + r.to, t2: [r.user, r.line, '片道 ' + yen(r.fare || 0)].filter(Boolean).join('・'), right: '›', onclick: go2 });
       case 'lineDest': return row({ icon: r.enabled && r.lineId ? '✅' : '⬜️', t1: r.id, t2: r.lineId ? r.lineId.slice(0, 6) + '…' : 'ID未設定', right: '›', onclick: go2 });
       default: return row({ t1: r.name || r.id, right: '›', onclick: go2 });
     }
@@ -1562,6 +1684,121 @@
     finally { S.mode = ''; setStatus(); }
   }
 
+  /* ================= 交通費（乗換案内で運賃を調べて入れる） ================= */
+  // 運賃を自動で返す無料のAPIがないため、乗換案内を駅名入りで開き、見た運賃を入れる。区間ごとに覚えて次からは選ぶだけ。
+  // 定期区間：定期の駅から外に出る駅（乗り換える駅）を出発駅にして調べれば、定期区間を引いた運賃になる
+  const yahooUrl = (a, b) => 'https://transit.yahoo.co.jp/search/result?from=' + encodeURIComponent(a) + '&to=' + encodeURIComponent(b) + '&ticket=ic';
+  const googleFareUrl = (a, b) => 'https://www.google.com/search?q=' + encodeURIComponent(a + 'から' + b + ' 運賃 IC');
+  const fareMemo = (a, b, round) => '交通費 ' + a + '→' + b + (round ? '（往復）' : '');
+  function farePage(main, p) {
+    const m = model();
+    setTitle('交通費（乗換案内）');
+    const me = S.user || (cfg && cfg.n) || '';
+    const passes = (data().passes || []).filter((x) => x.user === me);
+    const K = E.stationKey;
+    // よく使う区間（直近90日の記録の回数順）
+    const since = E.addDays(m.today, -90), used = {};
+    m.tx.forEach((t) => { if (t.date >= since && t.memo && t.memo.indexOf('交通費 ') === 0) { const k = t.memo.replace(/^交通費 /, '').replace(/（往復）$/, ''); used[k] = (used[k] || 0) + 1; } });
+    const routes = (data().routes || []).filter((x) => x.user === me).sort((a, b) => (used[b.from + '→' + b.to] || 0) - (used[a.from + '→' + a.to] || 0));
+    if (!p.state) {
+      const tate = m.categories.find((c) => c.kind === '支出' && c.group === '立替（あとで戻る）' && /交通/.test(c.name)) || m.categories.find((c) => c.kind === '支出' && c.group === '立替（あとで戻る）');
+      p.state = { from: '', to: '', fare: '', round: true, date: st.date || m.today, line: '',
+        category: prefs.fareCat || (tate && tate.id) || '', wallet: prefs.fareFrom || prefs.lastFrom || (m.wallets[0] || {}).id || '', remember: true, dirty: false };
+    }
+    const F = p.state;
+    const passSt = [];
+    passes.forEach((ps) => E.passStations(ps.route).forEach((x) => { if (!passSt.some((y) => K(y) === K(x))) passSt.push(x); }));
+    const inPass = (x) => !!x && passSt.some((y) => K(y) === K(x));
+
+    // 定期券
+    main.appendChild(card('定期券（' + me + '）',
+      passes.length ? passes.map((ps) => summaryRow('passes', ps, m)) : h('p', { class: 'note' }, '定期券を登録すると、定期の駅がボタンで出ます。定期の外に出る駅から調べれば、定期区間を引いた運賃になります。'),
+      h('button', { type: 'button', class: 'link', onclick: () => push('edit', { table: 'passes', id: null, preset: { user: me, name: '通勤定期' } }) }, '＋ 定期券を登録')));
+
+    // よく使う区間
+    if (routes.length) main.appendChild(card('よく使う区間（押すと下に入ります）', routes.slice(0, 12).map((r) => row({ icon: '🚃', t1: r.from + ' → ' + r.to,
+      t2: [r.line, used[r.from + '→' + r.to] ? '90日で' + used[r.from + '→' + r.to] + '回' : ''].filter(Boolean).join('・'), right: h('span', { class: 'amt' }, '片道 ' + yen(r.fare || 0)),
+      onclick: () => { Object.assign(F, { from: r.from, to: r.to, fare: String(r.fare || ''), line: r.line || '', category: r.category || F.category, wallet: r.wallet || F.wallet, dirty: true }); refresh(); } })),
+      routes.length > 12 ? h('button', { type: 'button', class: 'link', onclick: () => push('table', { table: 'routes' }) }, 'すべての区間を見る（' + routes.length + '）') : null));
+
+    // 入力
+    const total = h('div', { class: 'fare-total' });
+    const hint = h('div');
+    const yBtn = h('a', { class: 'btn-link primary', target: '_blank', rel: 'noopener noreferrer' }, '🔎 Yahoo!乗換案内で調べる');
+    const gBtn = h('a', { class: 'btn-link', target: '_blank', rel: 'noopener noreferrer' }, 'Googleで調べる');
+    const upd = () => {
+      const ok = F.from.trim() && F.to.trim();
+      [yBtn, gBtn].forEach((a) => a.classList.toggle('off', !ok));
+      if (ok) { yBtn.href = yahooUrl(F.from.trim(), F.to.trim()); gBtn.href = googleFareUrl(F.from.trim(), F.to.trim()); } else { yBtn.removeAttribute('href'); gBtn.removeAttribute('href'); }
+      const f = Number(String(F.fare).replace(/[,円\s]/g, '')) || 0;
+      total.textContent = f ? (F.round ? '往復 ' + yen(f * 2) + '（片道 ' + yen(f) + ' × 2）' : '片道 ' + yen(f)) : '';
+      clear(hint);
+      const a = inPass(F.from), b = inPass(F.to);
+      if (a && b) hint.appendChild(h('p', { class: 'note warn' }, '出発駅も到着駅も定期の区間の駅です。定期区間の中だけの移動なら、運賃はかかりません。'));
+      else if (a) hint.appendChild(h('p', { class: 'note' }, '🎫「' + F.from + '」は定期の区間の駅です。ここまで定期で来て、ここから先を払うなら、このまま調べてください。定期の途中の駅なら、定期の外に出る駅（乗り換える駅）に変えると、定期区間を引いた運賃になります。'));
+      else if (b) hint.appendChild(h('p', { class: 'note' }, '🎫「' + F.to + '」は定期の区間の駅です。ここから先は定期で乗るなら、このまま調べてください。定期の途中の駅なら、定期の区間に入る駅（乗り換える駅）に変えると、定期区間を引いた運賃になります。'));
+      const exp = passes.filter((ps) => (ps.end && F.date > ps.end) || (ps.start && F.date < ps.start));
+      if (exp.length) hint.appendChild(h('p', { class: 'note warn' }, exp.map((ps) => ps.name).join('・') + ' は ' + md(F.date) + ' に使えない期間です（期限 ' + (exp[0].end || '?') + '）。定期を使わない運賃で調べてください。'));
+    };
+    const stInput = (key, ph) => h('input', { type: 'text', class: 'station', placeholder: ph, value: F[key], autocomplete: 'off', enterkeyhint: 'next',
+      oninput: (e) => { F[key] = e.target.value; F.dirty = true; upd(); } });
+    const fromI = stInput('from', '出発駅（例 横浜）'), toI = stInput('to', '到着駅（例 藤沢）');
+    const passChips = (key, label) => passSt.length ? h('div', { class: 'chips scroll' }, h('span', { class: 'flabel inline' }, label),
+      passSt.map((x) => h('button', { type: 'button', class: 'chip' + (K(F[key]) === K(x) ? ' on' : ''), onclick: () => { F[key] = x; F.dirty = true; refresh(); } }, '🎫 ' + x))) : null;
+    const fareI = h('input', { type: 'text', inputmode: 'numeric', class: 'fare-input', placeholder: '例 410', value: F.fare, autocomplete: 'off',
+      oninput: (e) => { F.fare = e.target.value; F.dirty = true; upd(); } });
+    const dates = [[m.today, '今日'], [E.addDays(m.today, -1), '昨日'], [E.addDays(m.today, -2), 'おととい']];
+    const picker = h('input', { type: 'date', class: 'date-pick', value: F.date, 'aria-label': '日付を選ぶ', onchange: (e) => { if (e.target.value) { F.date = e.target.value; refresh(); } } });
+    const exCats = m.categories.filter((c) => c.kind === '支出');
+    const catSel = h('select', { onchange: (e) => { F.category = e.target.value; } }, exCats.map((c) => h('option', { value: c.id, selected: c.id === F.category ? 'selected' : null }, (c.icon || '') + ' ' + c.name)));
+    const walSel = walletSelect(m.wallets, F.wallet); walSel.addEventListener('change', (e) => { F.wallet = e.target.value; });
+
+    main.appendChild(card('区間と運賃',
+      h('div', { class: 'field' }, h('div', { class: 'flabel' }, '出発駅'), fromI, passChips('from', '定期の駅から：')),
+      h('div', { class: 'swap-row' }, h('button', { type: 'button', class: 'chip', onclick: () => { const x = F.from; F.from = F.to; F.to = x; refresh(); } }, '⇅ 入れかえ')),
+      h('div', { class: 'field' }, h('div', { class: 'flabel' }, '到着駅'), toI, passChips('to', '定期の駅まで：')),
+      hint,
+      h('div', { class: 'fare-links' }, yBtn, gBtn),
+      h('p', { class: 'note' }, '乗換案内でIC運賃（片道）を見て、下に入れてください。Yahoo!乗換案内アプリに定期券を登録してあれば、定期区間を引いた運賃も出ます。'),
+      h('div', { class: 'field' }, h('div', { class: 'flabel' }, '片道の運賃（円）'), fareI),
+      seg([['one', '片道'], ['round', '往復']], F.round ? 'round' : 'one', (v) => { F.round = v === 'round'; upd(); refresh(); }),
+      total,
+      h('div', { class: 'chips' }, dates.map(([d, l]) => h('button', { type: 'button', class: 'chip' + (F.date === d ? ' on' : ''), onclick: () => { F.date = d; refresh(); } }, l)),
+        h('label', { class: 'chip' + (dates.some(([d]) => d === F.date) ? '' : ' on') }, dates.some(([d]) => d === F.date) ? '📅 日付' : '📅 ' + mdw(F.date), picker)),
+      fieldWrap('分類', catSel),
+      fieldWrap('支払い', walSel),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: F.remember, onchange: (e) => { F.remember = e.target.checked; } }), h('span', null, 'この区間と運賃を覚える（次から上の一覧で選べます）'))));
+    upd();
+
+    const save = () => {
+      try {
+        const from = F.from.trim(), to = F.to.trim();
+        const fare = Number(String(F.fare).replace(/[,円\s]/g, ''));
+        if (!from || !to) throw new Error('出発駅と到着駅を入れてください。');
+        if (!(fare > 0) || fare !== Math.floor(fare)) throw new Error('片道の運賃を入れてください。');
+        if (!F.wallet) throw new Error('支払いを選んでください。');
+        const c = catOf(F.category);
+        const t = { id: rid('t'), date: F.date || m.today, type: '支出', amount: fare * (F.round ? 2 : 1), category: F.category, from: F.wallet, to: '', memo: fareMemo(from, to, F.round),
+          user: me, settle: c && c.group === '立替（あとで戻る）' ? '未精算' : '', ref: '', created: nowStr() };
+        put('tx', t);
+        if (F.remember) {
+          const old = (data().routes || []).find((r) => r.user === me && K(r.from) === K(from) && K(r.to) === K(to));
+          put('routes', Object.assign({}, old ? stripMeta(old) : { id: rid('rt'), user: me, from: from, to: to }, { fare: fare, category: F.category, wallet: F.wallet, line: F.line || (old && old.line) || '' }));
+        }
+        prefs.fareCat = F.category; prefs.fareFrom = F.wallet; savePrefs();
+        R.guard = null;
+        toast(t.memo + ' ' + yen(t.amount) + ' を登録しました' + (t.settle ? '（未精算）' : ''), { undo: () => { del('tx', t.id); toast('取り消しました'); } });
+        back();
+        return true;
+      } catch (e) { toast(e.message, { error: true }); return false; }
+    };
+    R.guard = { form: true, dirty: () => F.dirty && !!(F.fare || F.from || F.to), save: save, title: '交通費をまだ登録していません', saveLabel: '登録する' };
+    main.appendChild(h('div', { class: 'form-acts pad' },
+      h('button', { type: 'button', onclick: back }, 'やめる'),
+      h('button', { type: 'button', onclick: () => push('table', { table: 'routes' }) }, '区間の一覧'),
+      h('button', { type: 'button', class: 'primary', onclick: save }, '登録する')));
+  }
+
   function receiptPage(main, p) {
     const m = model();
     setTitle('レシートの読み取り');
@@ -1704,7 +1941,7 @@
     main.appendChild(h('button', { type: 'button', class: 'link center', onclick: () => push('edit', { table: 'todos', id: null }) }, '＋ 期限やメモをつけて追加'));
   }
 
-  const PAGES = { receipt: receiptPage, todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
+  const PAGES = { fare: farePage, receipt: receiptPage, todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
 
   /* ================= 登録画面 ================= */
   function showSetup(msg) {

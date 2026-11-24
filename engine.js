@@ -196,6 +196,32 @@ var Engine = (function () {
         { k: 'order', label: '並び順', type: 'int', def: 50 },
         { k: 'memo', label: 'メモ', type: 'longtext' }
       ]
+    },
+    passes: {
+      sheet: '定期券', label: '定期券（交通費の計算用）', prefix: 'ps',
+      fields: [
+        { k: 'id', type: 'id' },
+        { k: 'user', label: 'だれの定期か', type: 'select', opts: WHO, req: true },
+        { k: 'name', label: '名前（例 通勤定期）', type: 'text', req: true },
+        { k: 'route', label: '定期の区間（乗り換える駅を「〜」でつなぐ。例 鎌ケ谷大仏〜新津田沼〜津田沼〜横浜〜戸部）', type: 'text', req: true },
+        { k: 'start', label: '使い始め', type: 'date' },
+        { k: 'end', label: '有効期限', type: 'date' },
+        { k: 'memo', label: 'メモ', type: 'text' }
+      ]
+    },
+    routes: {
+      sheet: '交通費の区間', label: '交通費の区間', prefix: 'rt',
+      fields: [
+        { k: 'id', type: 'id' },
+        { k: 'user', label: 'だれの区間か', type: 'select', opts: WHO, req: true },
+        { k: 'from', label: '出発駅（定期の外に出る駅）', type: 'text', req: true },
+        { k: 'to', label: '到着駅', type: 'text', req: true },
+        { k: 'fare', label: '片道の運賃（定期区間を除く・IC）', type: 'int', req: true },
+        { k: 'line', label: '経路のメモ（例 JR東海道線）', type: 'text' },
+        { k: 'category', label: 'いつもの分類', type: 'ref', ref: 'categories' },
+        { k: 'wallet', label: 'いつもの支払い', type: 'ref', ref: 'wallets' },
+        { k: 'memo', label: 'メモ', type: 'text' }
+      ]
     }
   };
   const TABLES = Object.keys(SCHEMA);
@@ -311,6 +337,12 @@ var Engine = (function () {
       if (!(t.fx > 0)) throw new Error('ドルのレートを入れてください。');
     }
   }
+  /** 定期の区間「A〜B〜C」→ 駅の一覧 */
+  function passStations(route) {
+    return String(route || '').split(/[〜～~→⇔↔、,・\/／\s\-－]+/).map((x) => x.replace(/駅$/, '').trim()).filter(Boolean);
+  }
+  /** 駅名をくらべるための形（「駅」・空白・ケ/ヶの違いをそろえる） */
+  function stationKey(s) { return String(s || '').replace(/\s/g, '').replace(/駅$/, '').replace(/[ヶケが]/g, 'ケ'); }
   /** 外貨の金額 × レート → 円（1円未満は四捨五入） */
   function fxYen(famt, fx) {
     const a = Number(famt), r = Number(fx);
@@ -979,6 +1011,55 @@ var Engine = (function () {
       fixed: fx, plannedIncome: plannedIncome, dayRatio: dayRatio };
   }
 
+  /**
+   * 期間集計：from〜to（両端を含む）の支出・収入を、分類・月・支払い・入力者・メモごとにまとめる
+   * opt.user … '夫'／'妻' で入力者を絞る（空ならみんな）
+   * 振替・残高合わせはお金の移動なので数えない
+   */
+  function summary(m, from, to, opt) {
+    opt = opt || {};
+    const txs = m.tx.filter((t) => t.date >= from && t.date <= to && (t.type === '支出' || t.type === '収入') && (!opt.user || t.user === opt.user));
+    const cats = {};
+    const none = { id: '', name: '分類なし', icon: '・', kind: '支出', group: '生活費' };
+    const catOf = (t) => {
+      const c = m.c[t.category] || none;
+      const k = c.id + '|' + t.type;
+      return cats[k] || (cats[k] = { id: c.id, name: c.name, icon: c.icon, kind: t.type, group: c.group || '生活費', total: 0, count: 0, byMonth: {}, tx: [] });
+    };
+    const byMonth = {}, byUser = {}, byWallet = {}, byMemo = {};
+    let expense = 0, income = 0, household = 0, outside = 0, tatekae = 0, count = 0;
+    txs.forEach((t) => {
+      const c = catOf(t), ym = ymOf(t.date);
+      c.total += t.amount; c.count++; c.byMonth[ym] = (c.byMonth[ym] || 0) + t.amount; c.tx.push(t);
+      const bm = byMonth[ym] || (byMonth[ym] = { expense: 0, income: 0, household: 0 });
+      if (t.type === '支出') {
+        count++; expense += t.amount; bm.expense += t.amount;
+        if (c.group === '立替（あとで戻る）') tatekae += t.amount;
+        else if (c.group === '生活費の外') outside += t.amount;
+        else { household += t.amount; bm.household += t.amount; }
+        byUser[t.user || '不明'] = (byUser[t.user || '不明'] || 0) + t.amount;
+        byWallet[t.from || ''] = (byWallet[t.from || ''] || 0) + t.amount;
+        const memo = String(t.memo || '').replace(/（.*?）|\(.*?\)/g, '').trim().slice(0, 24);
+        if (memo) { const b = byMemo[memo] || (byMemo[memo] = { memo: memo, total: 0, count: 0 }); b.total += t.amount; b.count++; }
+      } else { income += t.amount; bm.income += t.amount; }
+    });
+    const list = Object.keys(cats).map((k) => cats[k]);
+    list.forEach((c) => c.tx.sort((a, b) => (b.date + (b.created || '')).localeCompare(a.date + (a.created || ''))));
+    // 期間の長さ（月平均を出すため。日数 ÷ 30.4）
+    const days = Math.max(1, diffDays(from, to) + 1);
+    const months = [];
+    for (let ym = ymOf(from); ym <= ymOf(to); ym = addMonths(ym, 1)) { months.push(ym); if (months.length > 240) break; }
+    return {
+      from: from, to: to, days: days, months: months, monthsLen: days / 30.4,
+      expense: expense, income: income, household: household, outside: outside, tatekae: tatekae, count: count,
+      expenseCats: list.filter((c) => c.kind === '支出').sort((a, b) => b.total - a.total),
+      incomeCats: list.filter((c) => c.kind === '収入').sort((a, b) => b.total - a.total),
+      byMonth: byMonth, byUser: byUser, byWallet: byWallet,
+      byMemo: Object.keys(byMemo).map((k) => byMemo[k]).sort((a, b) => b.total - a.total),
+      tx: txs
+    };
+  }
+
   function tatekaeOpen(m) {
     const list = m.tx.filter((t) => t.type === '支出' && t.settle === '未精算');
     return { count: list.length, total: list.reduce((s, t) => s + t.amount, 0), list: list };
@@ -1077,9 +1158,9 @@ var Engine = (function () {
     pad: pad, toDateStr: toDateStr, addDays: addDays, diffDays: diffDays, ymOf: ymOf, addMonths: addMonths, dateIn: dateIn, dimOf: dimOf, weekday: weekday,
     isAccount: isAccount, isCard: isCard, build: build, cycleOf: cycleOf, bills: bills, cardStatus: cardStatus, balances: balances,
     planOccurs: planOccurs, planRef: planRef, occurrences: occurrences, nextOccurrence: nextOccurrence, projection: projection,
-    month: month, tatekaeOpen: tatekaeOpen, annual: annual, bonusView: bonusView, alerts: alerts,
+    month: month, summary: summary, tatekaeOpen: tatekaeOpen, annual: annual, bonusView: bonusView, alerts: alerts,
     yen: yen, md: md, afterText: afterText, normText: normText, parseReceipt: parseReceipt, classifyReceipt: classifyReceipt, checkReceipt: checkReceipt, splitByCategory: splitByCategory,
-    fxYen: fxYen, usd: usd
+    fxYen: fxYen, usd: usd, passStations: passStations, stationKey: stationKey
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

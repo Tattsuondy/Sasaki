@@ -314,3 +314,32 @@ nav#nav .ver { display: block; font-size: 0.55rem; line-height: 1; letter-spacin
 .fx-line .note { text-align: left; }
 .fx-edit { display: flex; align-items: center; justify-content: flex-end; gap: 0.4rem; margin: 0.3rem 0; }
 .fx-input { width: 7.5rem; text-align: right; font-size: 1rem; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+
+/* 交通費 */
+.receipt-bar .note { font-size: 0.72rem; }
+.station, .fare-input { width: 100%; font-size: 1.05rem; padding: 0.55rem 0.7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+.fare-input { font-family: var(--num); font-weight: 800; font-size: 1.3rem; text-align: right; }
+.flabel.inline { display: inline-flex; align-items: center; margin: 0 0.2rem 0 0; white-space: nowrap; flex-shrink: 0; }
+.field .chips.scroll { margin-top: 0.35rem; }
+.swap-row { display: flex; justify-content: center; margin: -0.2rem 0; }
+.fare-links { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0 0.2rem; }
+.btn-link { display: inline-flex; align-items: center; justify-content: center; flex: 1 1 auto; text-decoration: none; border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.8rem; font-weight: 700; color: var(--fg); background: var(--panel); }
+.btn-link.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn-link.off { opacity: 0.4; pointer-events: none; }
+.fare-total { text-align: right; font-weight: 800; font-family: var(--num); margin: 0.4rem 0; min-height: 1.2em; }
+
+/* 期間集計 */
+.sum-dates { display: flex; align-items: center; gap: 0.4rem; margin: 0.4rem 0; }
+.sum-dates input { flex: 1; min-width: 0; padding: 0.45rem 0.5rem; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--fg); font-size: 0.95rem; }
+.catbar .sub { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; }
+.catbar.open { border-bottom: 0; }
+.diff { font-size: 0.75rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.diff.up { color: var(--neg); }
+.diff.down { color: var(--pos); }
+.kpi .r .diff { display: block; text-align: right; }
+.cat-open { background: var(--panel2); border-radius: 10px; padding: 0 0.6rem 0.4rem; margin: 0.3rem -0.4rem; border-bottom: 1px solid var(--line); }
+.month-bars { display: grid; gap: 0.25rem; margin: 0.2rem 0 0.5rem; }
+.month-bars .mb { display: grid; grid-template-columns: 2.6rem 1fr 5.5rem; align-items: center; gap: 0.5rem; font-size: 0.78rem; }
+.month-bars .bar { height: 0.35rem; margin: 0; }
+.month-bars .mv { text-align: right; font-variant-numeric: tabular-nums; }
+.cat-tx .row { padding-left: 0; padding-right: 0; }
