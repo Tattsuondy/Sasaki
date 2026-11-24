@@ -1040,7 +1040,12 @@ var Engine = (function () {
         byUser[t.user || '不明'] = (byUser[t.user || '不明'] || 0) + t.amount;
         byWallet[t.from || ''] = (byWallet[t.from || ''] || 0) + t.amount;
         const memo = String(t.memo || '').replace(/（.*?）|\(.*?\)/g, '').trim().slice(0, 24);
-        if (memo) { const b = byMemo[memo] || (byMemo[memo] = { memo: memo, total: 0, count: 0 }); b.total += t.amount; b.count++; }
+        if (memo) {
+          // レシートを分類ごとに分けた記録は、同じ日・同じ登録日時なので「1回の買い物」として数える
+          const b = byMemo[memo] || (byMemo[memo] = { memo: memo, total: 0, count: 0, seen: {} });
+          const visit = t.date + '|' + (t.created || t.id);
+          b.total += t.amount; if (!b.seen[visit]) { b.seen[visit] = true; b.count++; }
+        }
       } else { income += t.amount; bm.income += t.amount; }
     });
     const list = Object.keys(cats).map((k) => cats[k]);
