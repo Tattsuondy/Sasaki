@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v2-2026-11-24c';
-  const VERSION_LABEL = 'V.611241759';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v3-2026-11-26a';
+  const VERSION_LABEL = 'V.611251611';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -43,12 +43,26 @@
 
   /* ================= 表示の設定（端末ごと） ================= */
   const HOME_SECTIONS = [
-    ['alerts', 'お知らせ'], ['todos', 'やること'], ['assets', '資産のまとめ'], ['accounts', '口座'], ['cards', 'カード'], ['month', '今月の支出'], ['upcoming', '7日以内の予定'], ['fixed', '今月の固定費']
+    ['quick', '入力のショートカット'], ['alerts', 'お知らせ'], ['budget', '今月の予算の残り'], ['todos', 'やること'], ['assets', '資産のまとめ'], ['accounts', '口座'], ['cards', 'カード'],
+    ['month', '今月の支出'], ['upcoming', '7日以内の予定'], ['fixed', '今月の固定費']
+  ];
+  // 入力のショートカット（ホームのいちばん上）
+  const QUICK = [
+    ['expense', '💸', '支出'], ['receipt', '📷', 'レシート'], ['fare', '🚃', '交通費'], ['income', '💰', '収入'], ['transfer', '⇄', '振替'], ['usd', '$', 'ドル']
   ];
   const UI_DEF = { scale: 100, theme: 'auto', accent: 'green', density: 'normal', yen: 'suffix', keypad: 'calc', start: 'home', afterSave: 'stay',
-    home: HOME_SECTIONS.map((s) => s[0]), days: 62, mask: false, motion: true, listOrder: 'new' };
+    home: HOME_SECTIONS.map((s) => s[0]), quick: QUICK.map((q) => q[0]), days: 62, mask: false, motion: true, listOrder: 'new' };
   let UI = Object.assign({}, UI_DEF, store.get('kakeibo.ui', {}));
-  if (!UI.homeV2) { if (UI.home.indexOf('todos') < 0) UI.home.splice(Math.min(1, UI.home.length), 0, 'todos'); UI.homeV2 = true; store.set('kakeibo.ui', UI); }
+  if (!Array.isArray(UI.home)) UI.home = UI_DEF.home.slice();
+  if (!Array.isArray(UI.quick)) UI.quick = UI_DEF.quick.slice();
+  // 前の版の設定を引き継ぐ：増えた項目を足す（消した項目はそのまま）
+  if (!UI.homeV2) { if (UI.home.indexOf('todos') < 0) UI.home.splice(Math.min(1, UI.home.length), 0, 'todos'); UI.homeV2 = true; }
+  if (!UI.homeV3) {
+    if (UI.home.indexOf('quick') < 0) UI.home.unshift('quick');
+    if (UI.home.indexOf('budget') < 0) { const i = UI.home.indexOf('alerts'); UI.home.splice(i >= 0 ? i + 1 : 1, 0, 'budget'); }
+    UI.homeV3 = true;
+  }
+  store.set('kakeibo.ui', UI);
   function saveUI() { store.set('kakeibo.ui', UI); applyUI(); }
   function applyUI() {
     const r = document.documentElement;
@@ -162,7 +176,14 @@
     }, 250);
   }
 
-  function put(table, row) { mutate({ t: 'put', table: table, row: E.clean(table, row) }); }
+  // 同時編集の見張り：直し始めたときの版（スプレッドシートの更新日時）を一緒に送る。もう一人が先に直していたら、サーバーが上書きを止める
+  function put(table, row, opt) {
+    const op = { t: 'put', table: table, row: E.clean(table, row) };
+    const baseRow = S.base && S.base[table] ? S.base[table].find((r) => r.id === op.row.id) : null;
+    if (baseRow && baseRow._at) { op.base = baseRow._at; op.baseBy = baseRow._by || ''; }
+    if (opt && opt.force) op.force = true;
+    mutate(op);
+  }
   function del(table, id) { mutate({ t: 'del', table: table, rid: id }); }
   function mutate(op) {
     op.id = rid('o');
@@ -217,7 +238,16 @@
         const changed = !res.same || sending.length;
         S.rev = res.rev;
         S.ops = S.ops.filter((o) => !S.sendingIds[o.id]);
-        (res.rejected || []).forEach((r) => toast('保存できませんでした：' + r.error, { error: true, long: true }));
+        const conflicts = [];
+        (res.rejected || []).forEach((r) => {
+          if (r.conflict) {
+            const mine = sending.find((o) => o.id === r.op);
+            // 手元の写しを、もう一人が直した内容にする
+            if (S.base && r.current) { const list = S.base[r.table] || (S.base[r.table] = []); const i = list.findIndex((x) => x.id === r.rid); if (i >= 0) list[i] = r.current; else list.push(r.current); }
+            if (mine) conflicts.push({ r: r, mine: mine.row });
+          } else toast('保存できませんでした：' + r.error, { error: true, long: true });
+        });
+        if (conflicts.length) setTimeout(() => resolveConflicts(conflicts), 0);
         S.lastSync = Date.now(); S.error = ''; S.fails = 0;
         if (changed) { S.ver++; persist(); refresh(true); } else persist();
       } catch (e) {
@@ -235,6 +265,21 @@
     return S.inflight;
   }
 
+  /** もう一人が先に直していた行：どちらの内容にするかを選んでもらう */
+  async function resolveConflicts(list) {
+    for (const c of list) {
+      const sc = E.SCHEMA[c.r.table];
+      const name = c.mine.name || c.mine.title || c.mine.item || c.mine.memo || (c.mine.date ? md(c.mine.date) : '') || c.r.rid;
+      const diffs = sc.fields.filter((f) => !f.ro && f.type !== 'id' && String(c.mine[f.k] === undefined ? '' : c.mine[f.k]) !== String(c.r.current[f.k] === undefined ? '' : c.r.current[f.k]))
+        .slice(0, 5).map((f) => (f.label || f.k).replace(/（.*?）/g, '') + '：相手「' + fmtVal(c.r.current[f.k]) + '」／自分「' + fmtVal(c.mine[f.k]) + '」').join('\n');
+      const a = await ask('同じところを、' + c.r.by + 'が先に直していました', sc.label + '「' + name + '」を ' + c.r.at.slice(5, 16).replace('-', '/') + ' に' + c.r.by + 'が直しています。上書きせずに止めました。\n' + (diffs || ''),
+        [{ v: 'theirs', label: c.r.by + 'の内容にする', primary: true }, { v: 'mine', label: '自分の内容で上書き', danger: true }]);
+      if (a === 'mine') { put(c.r.table, Object.assign({}, c.mine), { force: true }); toast('自分の内容で上書きしました'); }
+      else { S.ver++; persist(); refresh(); toast(c.r.by + 'の内容にしました'); }
+    }
+  }
+  const fmtVal = (v) => v === true ? 'はい' : v === false ? 'いいえ' : v === '' || v === undefined || v === null ? '（空）' : String(v).slice(0, 20);
+
   function setStatus() {
     const el = $('#status'), tx = $('#status-text');
     if (!el) return;
@@ -251,7 +296,7 @@
   }
 
   /* ================= 画面の切り替え ================= */
-  const TAB_TITLE = { home: 'ホーム', input: '入力', list: '明細', plan: '予定', manage: '管理' };
+  const TAB_TITLE = { home: 'ホーム', input: '入力', list: '履歴', analysis: '分析', plan: '予定', manage: '管理' };
   const R = { tab: UI.start === 'input' ? 'input' : 'home', stack: [], guard: null };
   // guard … 入力中・編集中の画面が登録する { dirty(), save() }
 
@@ -284,7 +329,9 @@
     if (p) window.scrollTo(0, p.scroll || 0);
   }
   document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.tab)));
-  { const mb = document.querySelector('#nav [data-tab=manage]'); if (mb) mb.appendChild(h('span', { class: 'ver' }, VERSION_LABEL)); }
+  // 管理（設定）は右上の歯車から。版の表示も歯車の下に
+  $('#gear').addEventListener('click', () => go('manage'));
+  $('#ver').textContent = VERSION_LABEL;
 
   // refresh() … 操作したときの描き直し。refresh(true) … 裏の同期による描き直し（入力中は待つ）
   let refreshQueued = false, refreshSoft = true;
@@ -318,6 +365,7 @@
     try { page(main, cur ? cur.params : {}, cur); }
     catch (e) { main.appendChild(h('div', { class: 'card' }, h('p', { class: 'err' }, '表示できませんでした：' + e.message))); console.error(e); }
     document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === R.tab));
+    $('#gear').classList.toggle('on', R.tab === 'manage');
     $('#nav').classList.remove('hidden');
     if (toTop) window.scrollTo(0, 0); else window.scrollTo(0, y);
   }
@@ -421,9 +469,9 @@
     plan_overdue: () => { planTab = 'outlook'; go('plan'); },
     shortfall: () => { planTab = 'outlook'; go('plan'); },
     deadline: (a) => push('edit', { table: 'deadlines', id: a.deadline }),
-    todo: () => push('todos'),
-    budget_over: () => { listView = 'cats'; go('list'); },
-    budget_near: () => { listView = 'cats'; go('list'); }
+    todo: () => { planTab = 'todo'; go('plan'); },
+    budget_over: () => { anaTab = 'budget'; go('analysis'); },
+    budget_near: () => { anaTab = 'budget'; go('analysis'); }
   };
   let showAllAlerts = false;
 
@@ -433,6 +481,25 @@
     const bal = E.balances(m);
     const cards = E.cardStatus(m);
     const sections = {
+      quick() {
+        const keys = UI.quick.filter((k) => QUICK.some((q) => q[0] === k));
+        if (!keys.length) return null;
+        const file = h('input', { type: 'file', accept: 'image/*', class: 'hidden', onchange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) readReceipt(f); } });
+        return h('section', { class: 'quick' }, file, keys.map((k) => {
+          const q = QUICK.find((x) => x[0] === k);
+          return h('button', { type: 'button', class: 'qbtn q-' + k, onclick: () => quickGo(k, file) }, h('span', { class: 'qi' }, q[1]), h('span', { class: 'ql' }, q[2]));
+        }));
+      },
+      budget() {
+        const bl = E.budgetLeft(m);
+        if (!bl) return null;
+        const over = bl.left < 0;
+        return card('今月の予算の残り',
+          h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, over ? 'オーバー' : '残り'), h('div', { class: 'big' + (over ? ' neg' : '') }, yen(Math.abs(bl.left)))),
+            h('div', { class: 'r' }, h('div', { class: 'lbl' }, '1日あたり'), h('div', { class: 'v' }, over ? '—' : yen(bl.perDay)), h('div', { class: 'lbl' }, 'あと' + bl.daysLeft + '日'))),
+          bar(bl.ratio, over), h('div', { class: 'sub-line' }, h('span', null, '生活費 ' + yen(bl.used) + ' ／ 予算 ' + yen(bl.budget)), h('span', null, '月の ' + Math.round(bl.dayRatio * 100) + '%')),
+          h('button', { type: 'button', class: 'link', onclick: () => { anaTab = 'budget'; anaYm = ''; go('analysis'); } }, '分類ごとの残りを見る'));
+      },
       alerts() {
         const list = E.alerts(m, proj);
         if (!list.length) return null;
@@ -482,7 +549,7 @@
             h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '支出の合計'), h('div', { class: 'v' }, yen(s.expense))),
             h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '収入'), h('div', { class: 'v' }, yen(s.income))),
             h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '固定費'), h('div', { class: 'v' }, s.fixed.done + '/' + s.fixed.total + '件'))),
-          h('button', { type: 'button', class: 'link', onclick: () => go('list') }, '明細を見る'));
+          h('button', { type: 'button', class: 'link', onclick: () => go('list') }, '入力履歴を見る'));
       },
       upcoming() {
         const end = E.addDays(m.today, 7);
@@ -505,6 +572,16 @@
       }
     };
     UI.home.forEach((k) => { if (sections[k]) { const el = sections[k](); if (el) main.appendChild(el); } });
+  }
+  /** ホームのショートカットから入力を始める */
+  function quickGo(k, file) {
+    if (k === 'receipt') { st.type = '支出'; file.click(); return; }
+    if (k === 'fare') { push('fare', {}); return; }
+    st.type = k === 'income' ? '収入' : k === 'transfer' ? '振替' : '支出';
+    st.cur = k === 'usd' ? 'USD' : 'JPY';
+    st.amount = ''; st.usd = ''; st.from = ''; st.to = '';
+    if (k === 'usd') loadFx(false);
+    go('input');
   }
   const kindIcon = (k) => ({ '銀行': '🏦', '現金': '👛', '電子マネー': '📲', 'カード': '💳' }[k] || '💼');
 
@@ -618,7 +695,7 @@
         const r = fxRate(); const y = line.querySelector('.fx-yen'); if (y && r) y.textContent = '≈ ' + yen(E.fxYen(Number(st.usd), r));
       }, true));
       const fw = m.w[st.from];
-      if (st.type === '支出' && fw && E.isCard(fw)) wrap.appendChild(h('p', { class: 'note' }, 'カードの海外利用は、カード会社のレートと手数料で請求額が少し変わります。請求が確定したら、明細でこの記録の「金額（円）」を直せます（ドルの金額はそのまま残ります）。'));
+      if (st.type === '支出' && fw && E.isCard(fw)) wrap.appendChild(h('p', { class: 'note' }, 'カードの海外利用は、カード会社のレートと手数料で請求額が少し変わります。請求が確定したら、入力履歴でこの記録の「金額（円）」を直せます（ドルの金額はそのまま残ります）。'));
     } else {
       fxLineDraw = null;
       const amt = h('div', { class: 'amount' + (st.amount ? '' : ' zero') }, h('span', { class: 'cur' }, UI.yen === 'prefix' ? '¥' : ''), h('span', { class: 'num' }, st.amount ? Number(st.amount).toLocaleString('ja-JP') : '0'), h('span', { class: 'cur' }, UI.yen === 'prefix' ? '' : '円'));
@@ -641,7 +718,7 @@
 
     // 分類（よく使う順。多いときは「ほか」でたたむ）
     if (st.type !== '振替') {
-      const ranked = rankBy(cats, usage(m, 'category'), 'categories');
+      const ranked = rankBy(cats, useCount(m, 'category'), 'categories');
       const shown = st.moreCats ? ranked : topWith(ranked, catId, 11, 'categories');
       wrap.appendChild(h('div', { class: 'cats' }, shown.map((c) => h('button', { type: 'button', class: 'cat' + (c.id === catId ? ' on' : ''), onclick: () => {
         st.cat[st.type] = c.id;
@@ -652,7 +729,7 @@
     }
 
     // 口座・カード（よく使う順）
-    const wUse = usage(m, 'wallet');
+    const wUse = useCount(m, 'wallet');
     const chooser = (label, value, list, set, key) => {
       const ranked = rankBy(list, wUse, 'wallets');
       const shown = st['more' + key] ? ranked : topWith(ranked, value, 6, 'wallets');
@@ -667,6 +744,15 @@
       wrap.appendChild(chooser('移す先（カードの支払いもここ）', st.to, m.wallets.filter((w) => w.id !== st.from), (v) => { st.to = v; }, 'T'));
     }
 
+    // 予算の残り（支出のとき）
+    if (st.type === '支出') {
+      const all = E.budgetLeft(m), one = catId ? E.budgetLeft(m, catId) : null, cc = catOf(catId);
+      const parts = [];
+      if (one) parts.push(h('span', { class: one.left < 0 ? 'neg' : '' }, (cc ? cc.name : '') + ' ' + (one.left < 0 ? yen(-one.left) + ' オーバー' : '残り ' + yen(one.left))));
+      if (all) parts.push(h('span', { class: all.left < 0 ? 'neg' : '' }, '生活費 ' + (all.left < 0 ? yen(-all.left) + ' オーバー' : '残り ' + yen(all.left) + '（1日 ' + yen(all.perDay) + '）')));
+      if (parts.length) wrap.appendChild(h('div', { class: 'budget-line' }, parts));
+    }
+
     // メモ
     const memo = h('input', { type: 'text', class: 'memo', placeholder: 'メモ（店名・内容）', value: st.memo, maxlength: '200', enterkeyhint: 'done', oninput: (e) => { st.memo = e.target.value; showSug(); } });
     const sug = h('div', { class: 'chips scroll sug' });
@@ -677,7 +763,7 @@
     showSug();
     wrap.appendChild(h('div', { class: 'field' }, memo, sug));
     const c = catOf(catId);
-    if (st.type === '支出' && c && c.group === '立替（あとで戻る）') wrap.appendChild(h('p', { class: 'note' }, '会社などに立て替えた分は「未精算」として記録し、精算されたら明細で「精算済」にします。生活費には入りません。'));
+    if (st.type === '支出' && c && c.group === '立替（あとで戻る）') wrap.appendChild(h('p', { class: 'note' }, '会社などに立て替えた分は「未精算」として記録し、精算されたら入力履歴で「精算済」にします。生活費には入りません。'));
 
     wrap.appendChild(h('button', { type: 'button', class: 'save-btn', onclick: () => saveInput(false) }, '登録する'));
   }
@@ -719,7 +805,7 @@
 
   // 直近90日の使われ方（よく使う順に並べるため）
   let usageMemo = { key: '', v: {} };
-  function usage(m, what) {
+  function useCount(m, what) {
     const key = S.ver + '|' + what;
     if (usageMemo.key === key) return usageMemo.v;
     const since = E.addDays(m.today, -90), c = {};
@@ -785,39 +871,110 @@
     return out;
   }
 
+  // レシートの品目（内訳）を記録IDごとに
+  let itemsMemo = { key: '', v: {} };
+  function itemsByTx() {
+    if (itemsMemo.key === S.ver) return itemsMemo.v;
+    const o = {};
+    (data().items || []).forEach((it) => { if (it.tx) (o[it.tx] = o[it.tx] || []).push(it); });
+    itemsMemo = { key: S.ver, v: o };
+    return o;
+  }
+
   /* ================= 明細 ================= */
-  let listYm = '', listFilter = 'all', listQuery = '', listView = 'days';
+  let listYm = '', listFilter = 'all', listQuery = '';
+  const monthNav = (ym, set) => h('div', { class: 'month-nav' },
+    h('button', { type: 'button', 'aria-label': '前の月', onclick: () => set(E.addMonths(ym, -1)) }, '‹'),
+    h('strong', null, (+ym.slice(0, 4)) + '年' + (+ym.slice(5)) + '月'),
+    h('button', { type: 'button', 'aria-label': '次の月', onclick: () => set(E.addMonths(ym, 1)) }, '›'));
+
+  /* ================= 分析 ================= */
+  let anaTab = 'sum', anaYm = '';
+  function analysisPage(main) {
+    const m = model();
+    main.appendChild(seg([['sum', '期間集計'], ['budget', '予算と分類'], ['tatekae', '立替の精算']], anaTab, (v) => { anaTab = v; refresh(); }));
+    if (anaTab === 'sum') { sumView(main, m); return; }
+    if (anaTab === 'tatekae') { tatekaeView(main, m); return; }
+    // 予算と分類（月ごと）
+    if (!anaYm) anaYm = E.ymOf(m.today);
+    const s = E.month(m, anaYm);
+    main.appendChild(monthNav(anaYm, (v) => { anaYm = v; refresh(); }));
+    const isNow = anaYm === E.ymOf(m.today);
+    const bl = isNow ? E.budgetLeft(m) : null;
+    main.appendChild(card(null,
+      h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, '生活費'), h('div', { class: 'big' }, yen(s.household))),
+        h('div', { class: 'r' }, h('div', { class: 'lbl' }, '予算'), h('div', { class: 'v' }, s.budget ? yen(s.budget) : '未設定'),
+          s.budget ? h('div', { class: 'lbl' + (s.household > s.budget ? ' neg' : '') }, s.household > s.budget ? yen(s.household - s.budget) + ' オーバー' : '残り ' + yen(s.budget - s.household)) : null)),
+      s.budget ? bar(s.household / s.budget, s.household > s.budget) : null,
+      bl ? h('p', { class: 'note' + (bl.left < 0 ? ' warn' : '') }, bl.left >= 0 ? '今月はあと ' + bl.daysLeft + '日。1日あたり ' + yen(bl.perDay) + ' まで使えます（月の ' + Math.round(bl.dayRatio * 100) + '% が過ぎて、予算の ' + Math.round(bl.ratio * 100) + '% を使用）。' : '今月の予算を ' + yen(-bl.left) + ' 超えています。') : null,
+      !s.budget ? h('button', { type: 'button', class: 'link', onclick: () => push('table', { table: 'categories' }) }, '分類ごとに予算を入れる（管理 > 分類と予算）') : null));
+    const max = Math.max(1, ...s.expenseCats.map((c) => Math.max(c.total, c.budget || 0)));
+    main.appendChild(card('支出（分類ごと・押すと履歴）', s.expenseCats.length ? s.expenseCats.map((c) => h('button', { type: 'button', class: 'catbar tap', onclick: () => { listFilter = 'c:' + c.id; listYm = anaYm; go('list'); } },
+      h('div', { class: 'top' }, h('span', null, (c.icon || '') + ' ' + c.name, c.group !== '生活費' ? h('span', { class: 'tag' }, c.group === '生活費の外' ? '生活費の外' : '立替') : null),
+        h('span', { class: 'amt' + (c.budget && c.total > c.budget ? ' neg' : '') }, yen(c.total) + (c.budget ? ' / ' + yen(c.budget) : ''))),
+      bar(c.budget ? c.total / c.budget : c.total / max, c.budget && c.total > c.budget),
+      c.budget ? h('div', { class: 'sub' }, h('span', null, c.total > c.budget ? yen(c.total - c.budget) + ' オーバー' : '残り ' + yen(c.budget - c.total)), h('span', null, Math.round(c.total / c.budget * 100) + '%')) : null)) : empty('この月の支出はありません')));
+    if (s.incomeCats.length) main.appendChild(card('収入（分類ごと）', s.incomeCats.map((c) => row({ icon: c.icon, t1: c.name, right: amountEl(c.total, 'pos') }))));
+    const users = Object.keys(s.byUser);
+    if (users.length > 1) main.appendChild(card('入力した人ごとの支出', users.map((u) => row({ t1: u, right: amountEl(s.byUser[u]) }))));
+  }
+
+  /* ---------- 立替の精算：会社からの精算金と、未精算の立替を突き合わせる ---------- */
+  const TK = { sel: null, income: '', wallet: '' };
+  function tatekaeView(main, m) {
+    const open = m.tx.filter((t) => t.type === '支出' && t.settle === '未精算').sort((a, b) => a.date.localeCompare(b.date));
+    if (!TK.sel) { TK.sel = {}; open.forEach((t) => { TK.sel[t.id] = true; }); }
+    Object.keys(TK.sel).forEach((id) => { if (!open.some((t) => t.id === id)) delete TK.sel[id]; });
+    const chosen = open.filter((t) => TK.sel[t.id]);
+    const sum = chosen.reduce((a, t) => a + t.amount, 0);
+    // 精算金の候補：最近90日の収入（会社立替の精算・給与以外も含めて、自分で選ぶ）
+    const incomes = m.tx.filter((t) => t.type === '収入' && t.date >= E.addDays(m.today, -90)).sort((a, b) => b.date.localeCompare(a.date));
+    const inc = incomes.find((t) => t.id === TK.income) || null;
+    main.appendChild(card(null,
+      h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, '未精算の立替'), h('div', { class: 'big' }, yen(open.reduce((a, t) => a + t.amount, 0)))),
+        h('div', { class: 'r' }, h('div', { class: 'lbl' }, '件数'), h('div', { class: 'v' }, open.length + '件'))),
+      h('p', { class: 'note' }, '会社から精算金が入ったら、その入金と、精算された立替を選んで「精算済」にします。金額が合っているかをここで確かめられます。')));
+    if (!open.length) { main.appendChild(card(null, empty('未精算の立替はありません'))); return; }
+    main.appendChild(card('精算された立替を選ぶ（' + chosen.length + '／' + open.length + '件）',
+      h('div', { class: 'btns' }, h('button', { type: 'button', onclick: () => { open.forEach((t) => { TK.sel[t.id] = true; }); refresh(); } }, 'すべて選ぶ'), h('button', { type: 'button', onclick: () => { TK.sel = {}; refresh(); } }, 'すべて外す')),
+      open.map((t) => h('label', { class: 'check tk-row' }, h('input', { type: 'checkbox', checked: !!TK.sel[t.id], onchange: (e) => { TK.sel[t.id] = e.target.checked; refresh(); } }),
+        h('span', { class: 'grow' }, md(t.date) + '　' + (t.memo || (catOf(t.category) || {}).name || '立替'), h('small', null, '　' + walletName(t.from))), h('span', { class: 'amt' }, yen(t.amount))))));
+    const isel = h('select', { onchange: (e) => { TK.income = e.target.value; refresh(); } },
+      h('option', { value: '' }, '（入金をまだ記録していない）'),
+      incomes.map((t) => h('option', { value: t.id, selected: t.id === TK.income ? 'selected' : null }, md(t.date) + ' ' + (t.memo || (catOf(t.category) || {}).name || '収入') + ' ' + yen(t.amount) + '（' + walletName(t.to) + '）')));
+    const diff = inc ? inc.amount - sum : null;
+    const wsel = walletSelect(m.accounts, TK.wallet || (m.accounts.find((a) => /JRE|大分/.test(a.name)) || m.accounts[0] || {}).id); wsel.addEventListener('change', (e) => { TK.wallet = e.target.value; });
+    main.appendChild(card('会社から入った精算金',
+      fieldWrap('記録してある入金から選ぶ', isel),
+      inc ? h('div', { class: 'check-box ' + (diff === 0 ? 'ok' : 'warn') }, h('strong', null, diff === 0 ? '✓ 金額が一致しました' : '⚠ 差があります'),
+        h('span', null, '入金 ' + yen(inc.amount) + '／選んだ立替 ' + yen(sum) + (diff ? '（差 ' + yen(diff, { plus: true }) + '）' : ''))) :
+        h('div', null, h('p', { class: 'note' }, '入金をまだ記録していなければ、ここで記録できます（選んだ立替の合計 ' + yen(sum) + '）。'), fieldWrap('入金先', wsel))));
+    main.appendChild(h('div', { class: 'form-acts pad' },
+      h('button', { type: 'button', class: 'primary', disabled: chosen.length ? null : 'disabled', onclick: async () => {
+        if (!chosen.length) return;
+        if (inc && diff !== 0) { const a = await ask('金額に差があります', '入金 ' + yen(inc.amount) + ' と、選んだ立替 ' + yen(sum) + ' が合いません。このまま精算済にしますか？', [{ v: true, label: '精算済にする', primary: true }, { v: false, label: 'やめる' }]); if (!a) return; }
+        const before = chosen.map(stripMeta);
+        let added = null;
+        if (!inc) {
+          const cat = m.categories.find((c) => c.kind === '収入' && /立替|精算|経費/.test(c.name)) || m.categories.find((c) => c.kind === '収入');
+          added = { id: rid('t'), date: m.today, type: '収入', amount: sum, category: cat ? cat.id : '', from: '', to: wsel.value, memo: '立替の精算（' + chosen.length + '件）', user: S.user, settle: '', ref: '', created: nowStr() };
+          try { put('tx', added); } catch (e) { toast(e.message, { error: true }); return; }
+        }
+        before.forEach((t) => put('tx', Object.assign({}, t, { settle: '精算済' })));
+        TK.sel = null; TK.income = '';
+        toast(chosen.length + '件を精算済にしました' + (added ? '（入金 ' + yen(sum) + ' も記録）' : ''), { undo: () => { before.forEach((t) => put('tx', t)); if (added) del('tx', added.id); toast('元に戻しました'); } });
+      } }, inc ? '選んだ立替を精算済にする' : '入金を記録して、精算済にする')));
+  }
   function listPage(main) {
     const m = model();
-    if (listView === 'sum') {
-      main.appendChild(seg([['days', '日ごと'], ['cats', '分類ごと'], ['sum', '期間集計']], listView, (v) => { listView = v; refresh(); }));
-      sumView(main, m);
-      return;
-    }
     if (!listYm) listYm = E.ymOf(m.today);
     const s = E.month(m, listYm);
-    main.appendChild(h('div', { class: 'month-nav' },
-      h('button', { type: 'button', 'aria-label': '前の月', onclick: () => { listYm = E.addMonths(listYm, -1); refresh(); } }, '‹'),
-      h('strong', null, (+listYm.slice(0, 4)) + '年' + (+listYm.slice(5)) + '月'),
-      h('button', { type: 'button', 'aria-label': '次の月', onclick: () => { listYm = E.addMonths(listYm, 1); refresh(); } }, '›')));
+    main.appendChild(monthNav(listYm, (v) => { listYm = v; refresh(); }));
     main.appendChild(card(null, h('div', { class: 'grid3' },
       h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '支出'), h('div', { class: 'v' }, yen(s.expense))),
       h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '収入'), h('div', { class: 'v pos' }, yen(s.income))),
       h('div', { class: 'mini' }, h('div', { class: 'lbl' }, '生活費／予算'), h('div', { class: 'v' }, yen(s.household) + (s.budget ? ' / ' + yen(s.budget) : '')))),
       s.budget ? bar(s.household / s.budget, s.household > s.budget) : null));
-    main.appendChild(seg([['days', '日ごと'], ['cats', '分類ごと'], ['sum', '期間集計']], listView, (v) => { listView = v; refresh(); }));
-
-    if (listView === 'cats') {
-      const max = Math.max(1, ...s.expenseCats.map((c) => Math.max(c.total, c.budget || 0)));
-      main.appendChild(card('支出（分類ごと）', s.expenseCats.length ? s.expenseCats.map((c) => h('button', { type: 'button', class: 'catbar tap', onclick: () => { listFilter = 'c:' + c.id; listView = 'days'; refresh(); } },
-        h('div', { class: 'top' }, h('span', null, (c.icon || '') + ' ' + c.name, c.group !== '生活費' ? h('span', { class: 'tag' }, c.group === '生活費の外' ? '生活費の外' : '立替') : null),
-          h('span', { class: 'amt' + (c.budget && c.total > c.budget ? ' neg' : '') }, yen(c.total) + (c.budget ? ' / ' + yen(c.budget) : ''))),
-        bar(c.budget ? c.total / c.budget : c.total / max, c.budget && c.total > c.budget))) : empty('この月の支出はありません')));
-      if (s.incomeCats.length) main.appendChild(card('収入（分類ごと）', s.incomeCats.map((c) => row({ icon: c.icon, t1: c.name, right: amountEl(c.total, 'pos') }))));
-      const users = Object.keys(s.byUser);
-      if (users.length) main.appendChild(card('入力した人ごとの支出', users.map((u) => row({ t1: u, right: amountEl(s.byUser[u]) }))));
-      return;
-    }
 
     // 絞り込み
     const opts = [['all', 'すべて'], ['me', '自分の入力'], ['open', '立替（未精算）']]
@@ -854,21 +1011,24 @@
           } }, 'まとめて精算済にする')));
       }
       let curDate = null, group = null;
+      const doneR = {};
       list.forEach((t) => {
+        // レシートを分けて登録した記録は、1回の入力として1行にまとめる
+        if (t.rcpt) { if (doneR[t.rcpt]) return; doneR[t.rcpt] = true; }
         if (t.date !== curDate) {
           curDate = t.date;
           const dayTotal = list.filter((x) => x.date === t.date && x.type === '支出').reduce((a, x) => a + x.amount, 0);
           group = h('section', { class: 'card day' }, h('div', { class: 'day-head' }, h('span', null, mdw(t.date)), dayTotal ? h('span', { class: 'amt' }, yen(-dayTotal)) : null));
           box.appendChild(group);
         }
-        group.appendChild(txRow(t));
+        group.appendChild(t.rcpt ? receiptRow(t.rcpt, list.filter((x) => x.rcpt === t.rcpt)) : txRow(t));
       });
     };
     refreshList();
   }
 
   /* ---------- 期間集計（好きな期間で、分類ごと・支払いごと・お店ごとに合計） ---------- */
-  const SUM = { preset: 'thisMonth', from: '', to: '', user: '', open: '', more: false };
+  const SUM = { preset: 'thisMonth', from: '', to: '', user: '', open: '', more: false, byItems: store.get('kakeibo.sumByItems', true) !== false, itemsMore: false };
   function sumRange(m) {
     const t = m.today, ym = E.ymOf(t), y = +t.slice(0, 4);
     const endOf = (ym2) => ym2 + '-' + E.pad(E.dimOf(ym2));
@@ -909,9 +1069,9 @@
     main.appendChild(seg([['', 'ふたり'], ['夫', '夫の入力'], ['妻', '妻の入力']], SUM.user, (v) => { SUM.user = v; refresh(); }));
     let [from, to] = sumRange(m);
     if (from > to) { const x = from; from = to; to = x; }
-    const s2 = E.summary(m, from, to, { user: SUM.user });
+    const s2 = E.summary(m, from, to, { user: SUM.user, byItems: SUM.byItems });
     const [pf, pt] = sumPrev(from, to);
-    const prev = E.summary(m, pf, pt, { user: SUM.user });
+    const prev = E.summary(m, pf, pt, { user: SUM.user, byItems: SUM.byItems });
     const prevCat = {}; prev.expenseCats.forEach((c) => { prevCat[c.id] = c.total; });
     const perMonth = (n) => s2.monthsLen >= 1.5 ? yen(Math.round(n / s2.monthsLen)) : null;
     const diff = (now, before) => {
@@ -949,10 +1109,29 @@
         return h('div', { class: 'mb' }, h('span', { class: 'ml' }, (+ym.slice(5)) + '月'), bar(v / mx), h('span', { class: 'mv' }, yen(v)));
       })) : null;
       const shown = SUM.more ? c.tx : c.tx.slice(0, 20);
-      return h('div', { class: 'cat-open' }, head, mm, h('div', { class: 'cat-tx' }, shown.map((t) => txRow(t))),
+      const its = s2.items.filter((it) => (it.category || '') === c.id).slice(0, 10);
+      return h('div', { class: 'cat-open' }, head, mm,
+        its.length ? h('div', { class: 'cat-items' }, h('div', { class: 'flabel' }, 'レシートの品目（多い順）'), its.map((it) => h('div', { class: 'ci-row' }, h('span', null, it.name + (it.count > 1 ? ' ×' + it.count : '')), h('span', null, yen(it.total))))) : null,
+        h('div', { class: 'cat-tx' }, shown.map((t) => t._part ? h('div', { class: 'part-wrap' }, txRow(t), h('div', { class: 'part-note' }, 'このうち「' + c.name + '」の品目の分 ' + yen(t._part))) : txRow(t))),
         c.tx.length > shown.length ? h('button', { type: 'button', class: 'link', onclick: () => { SUM.more = true; refresh(); } }, 'ほか ' + (c.tx.length - shown.length) + '件を表示') : null);
     });
-    main.appendChild(card('分類ごとの支出（押すと中身）', catRows.length ? catRows : empty('この期間の支出はありません')));
+    if (s2.months.length > 1 && s2.expenseCats.length) {
+      const ms = s2.months;
+      const th = h('tr', null, h('th', { class: 'sticky' }, '分類'), ms.map((ym) => h('th', null, (ym.slice(5) === '01' || ym === ms[0] ? (+ym.slice(2, 4)) + '年' : '') + (+ym.slice(5)) + '月')), h('th', null, '合計'));
+      const trs = s2.expenseCats.map((c) => h('tr', null, h('td', { class: 'sticky' }, (c.icon || '') + ' ' + c.name),
+        ms.map((ym) => h('td', { class: c.byMonth[ym] ? '' : 'zero' }, c.byMonth[ym] ? (c.byMonth[ym]).toLocaleString('ja-JP') : '-')), h('td', { class: 'tot' }, c.total.toLocaleString('ja-JP'))));
+      const ft = h('tr', { class: 'foot' }, h('td', { class: 'sticky' }, '支出の合計'), ms.map((ym) => h('td', null, ((s2.byMonth[ym] || {}).expense || 0).toLocaleString('ja-JP'))), h('td', { class: 'tot' }, s2.expense.toLocaleString('ja-JP')));
+      main.appendChild(card('分類ごとの月別（円）', h('div', { class: 'mtable-wrap' }, h('table', { class: 'mtable' }, h('thead', null, th), h('tbody', null, trs, ft))),
+        h('p', { class: 'note' }, '横にスクロールできます。月の途中の期間は、その月の分だけです。')));
+    }
+    main.appendChild(card('分類ごとの支出（押すと中身）', catRows.length ? catRows : empty('この期間の支出はありません'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: SUM.byItems, onchange: (e) => { SUM.byItems = e.target.checked; store.set('kakeibo.sumByItems', SUM.byItems); refresh(); } }),
+        h('span', null, 'まとめて1件で登録したレシートも、品目の分類で分けて数える' + (s2.splitByItems ? '（この期間 ' + s2.splitByItems + '件）' : '')))));
+    if (s2.items.length) {
+      const list = SUM.itemsMore ? s2.items.slice(0, 100) : s2.items.slice(0, 15);
+      main.appendChild(card('品目ごと（レシートの内訳・印字の金額）', list.map((it) => { const c = catOf(it.category); return row({ icon: c ? c.icon : '・', t1: it.name, t2: (c ? c.name : '分類なし') + '・' + it.count + '回', right: amountEl(it.total) }); }),
+        s2.items.length > list.length ? h('button', { type: 'button', class: 'link', onclick: () => { SUM.itemsMore = true; refresh(); } }, 'もっと見る（全' + s2.items.length + '品目）') : null));
+    }
     if (s2.incomeCats.length) main.appendChild(card('収入（分類ごと）', s2.incomeCats.map((c) => row({ icon: c.icon, t1: c.name, t2: c.count + '件', right: amountEl(c.total, 'pos') }))));
 
     // 支払いごと・入力者ごと・お店（メモ）ごと
@@ -995,12 +1174,60 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
+  /** レシート1枚（1回の入力）を1行で。押すと分類ごとの記録と品目の内訳 */
+  function receiptRow(rcpt, parts) {
+    if (parts.length === 1 && !(itemsByTx()[parts[0].id] || []).length) return txRow(parts[0]);
+    const t0 = parts[0];
+    const total = parts.reduce((a, t) => a + t.amount, 0);
+    const nIt = (data().items || []).filter((it) => it.rcpt === rcpt).length;
+    const names = parts.slice().sort((a, b) => b.amount - a.amount).map((t) => { const c = catOf(t.category); return c ? c.name : '分類なし'; });
+    const pend = parts.some((t) => t._pending), open = parts.some((t) => t.settle === '未精算');
+    return row({ icon: '🧾', t1: t0.memo || 'レシート', t2: [names.join('・'), walletName(t0.from), t0.user, nIt ? nIt + '品目' : ''].filter(Boolean).join('・'),
+      tag: pend ? '未送信' : open ? '未精算' : null, tagCls: pend ? 'wait' : open ? 'mid' : '',
+      right: amountEl(-total), onclick: () => push('receiptView', { rcpt: rcpt }) });
+  }
+  function receiptViewPage(main, p) {
+    const m = model();
+    setTitle('レシートの内容');
+    const parts = (data().tx || []).filter((t) => t.rcpt === p.rcpt).sort((a, b) => b.amount - a.amount);
+    const items = (data().items || []).filter((it) => it.rcpt === p.rcpt);
+    if (!parts.length) { main.appendChild(card(null, empty('見つかりません（削除された可能性があります）'))); return; }
+    const t0 = parts[0], total = parts.reduce((a, t) => a + t.amount, 0);
+    main.appendChild(card(null,
+      h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, mdw(t0.date) + '・' + (t0.memo || 'レシート')), h('div', { class: 'big' }, yen(total))),
+        h('div', { class: 'r' }, h('div', { class: 'lbl' }, '支払い'), h('div', { class: 'v' }, walletName(t0.from)), h('div', { class: 'lbl' }, t0.user || ''))),
+      h('p', { class: 'note' }, parts.length > 1 ? '分類ごとに ' + parts.length + '件の記録に分けて登録しています。' : '1件の記録で登録しています（集計では、品目の分類で分けて数えます）。')));
+    main.appendChild(card('分類ごとの記録（押すと直せます）', parts.map((t) => txRow(t))));
+    if (items.length) {
+      const byCat = {};
+      items.forEach((it) => { (byCat[it.category || ''] = byCat[it.category || ''] || []).push(it); });
+      const keys = Object.keys(byCat).sort((a, b) => byCat[b].reduce((x, it) => x + (Number(it.price) || 0), 0) - byCat[a].reduce((x, it) => x + (Number(it.price) || 0), 0));
+      const isum = items.reduce((a, it) => a + (Number(it.price) || 0), 0);
+      main.appendChild(card('品目の内訳（' + items.length + '品目）', keys.map((k) => {
+        const c = catOf(k), list = byCat[k];
+        return h('div', { class: 'rv-group' }, h('div', { class: 'rv-head' }, h('span', null, (c ? c.icon + ' ' + c.name : '分類なし')), h('span', null, yen(list.reduce((a, it) => a + (Number(it.price) || 0), 0)))),
+          list.map((it) => row({ t1: it.name, t2: it.reduced ? '8%' : '', right: amountEl(-(Number(it.price) || 0)), onclick: () => push('edit', { table: 'items', id: it.id }) })));
+      }), h('p', { class: 'note' }, '品目の合計 ' + yen(isum) + '（レシートの印字の金額）／支払った額 ' + yen(total) + (isum !== total ? '。差 ' + yen(total - isum) + ' は税・値引きなどで、分類ごとの記録に割り振っています。' : '。')),
+        h('p', { class: 'note' }, '品目を押すと分類を直せます。期間集計の「品目ごと」と、まとめて登録したレシートの分け方に反映されます。')));
+    }
+    main.appendChild(h('div', { class: 'form-acts pad' },
+      h('button', { type: 'button', onclick: back }, '戻る'),
+      h('button', { type: 'button', class: 'danger', onclick: async () => {
+        if (!(await confirmDel('このレシートの記録 ' + parts.length + '件と品目 ' + items.length + '件を削除します。'))) return;
+        const oldT = parts.map(stripMeta), oldI = items.map(stripMeta);
+        oldT.forEach((t) => del('tx', t.id)); oldI.forEach((it) => del('items', it.id));
+        toast('レシートを削除しました', { undo: () => { oldT.forEach((t) => put('tx', t)); oldI.forEach((it) => put('items', it)); toast('元に戻しました'); } });
+        back();
+      } }, 'レシートごと削除')));
+  }
+
   function txRow(t) {
     const c = catOf(t.category);
     const sign = t.type === '収入' ? 1 : t.type === '支出' ? -1 : 0;
     const where = t.type === '振替' ? walletName(t.from) + ' → ' + walletName(t.to) : t.type === '収入' ? walletName(t.to) : t.type === '残高合わせ' ? walletName(t.to) : walletName(t.from);
     const title = t.type === '振替' ? (t.memo || '振替') : t.type === '残高合わせ' ? '残高合わせ' : (t.memo || (c ? c.name : '分類なし'));
-    const t2 = [t.type === '支出' || t.type === '収入' ? (c ? c.name : '分類なし') : t.type, where, t.user].filter(Boolean).join('・');
+    const nIt = (itemsByTx()[t.id] || []).length;
+    const t2 = [t.type === '支出' || t.type === '収入' ? (c ? c.name : '分類なし') : t.type, where, t.user, nIt ? '🧾' + nIt + '品目' : ''].filter(Boolean).join('・');
     return row({ icon: t.type === '振替' ? '⇄' : t.type === '残高合わせ' ? '⚖️' : (c ? c.icon : '・'), t1: title, t2: t2,
       tag: t._pending ? '未送信' : t.settle === '未精算' ? '未精算' : t.settle === '精算済' ? '精算済' : t.ref ? '予定' : null,
       tagCls: t._pending ? 'wait' : t.settle === '未精算' ? 'mid' : '',
@@ -1015,7 +1242,8 @@
   let planTab = 'outlook', planYm = '', planFilter = 'all';
   function planPage(main) {
     const m = model();
-    main.appendChild(seg([['outlook', '見通し'], ['fixed', '固定費'], ['annual', '年間'], ['bonus', 'ボーナス']], planTab, (v) => { planTab = v; refresh(); }));
+    main.appendChild(seg([['outlook', '見通し'], ['fixed', '毎月'], ['annual', '年間'], ['bonus', 'ボーナス'], ['todo', 'やること']], planTab, (v) => { planTab = v; refresh(); }, 'seg-5'));
+    if (planTab === 'todo') { todoSection(main, m, true); return; }
     if (planTab === 'outlook') {
       const proj = E.projection(m, UI.days);
       const fsel = h('select', { class: 'filter', 'aria-label': '口座で絞り込む', onchange: (e) => { planFilter = e.target.value; refresh(); } },
@@ -1245,27 +1473,71 @@
   /* ================= 管理 ================= */
   function managePage(main) {
     const m = model();
-    const item = (icon, t1, t2, fn) => row({ icon: icon, t1: t1, t2: t2, right: '›', onclick: fn });
-    main.appendChild(card('お金の流れ',
-      item('🏦', '口座・カード', m.accounts.length + '口座・' + m.cards.length + '枚', () => push('table', { table: 'wallets' })),
-      item('🧾', '開始残高', '口座ごとに、今の残高を入れる', () => push('opening')),
-      item('💳', 'カードの請求', '請求額の確定・引き落とし不可', () => push('bills')),
-      item('🗂', '分類と予算', m.categories.length + '件', () => push('table', { table: 'categories' })),
-      item('🚃', '交通費の区間・定期券', ((data().routes || []).length) + '区間・定期 ' + ((data().passes || []).length) + '枚', () => push('fare', {})),
-      item('🧾', 'レシートの読み取りルール', (m.data.rules || []).length + '件（品名の文字で分類を決める）', () => push('table', { table: 'rules' }))));
-    main.appendChild(card('予定',
-      item('🏠', '固定費・収入・年間の予定', m.plansAll.length + '件', () => push('table', { table: 'plans' })),
-      item('✅', 'やることリスト', m.todos.filter((t) => !t.done).length + '件が残っています', () => push('todos')),
-      item('📅', '期限', m.deadlines.filter((d) => !d.done).length + '件', () => push('table', { table: 'deadlines' })),
-      item('🎉', 'ボーナス', m.bonuses.length + '回', () => push('table', { table: 'bonuses' }))));
+    const d = data();
+    const item = (icon, t1, t2, fn, tag) => row({ icon: icon, t1: t1, t2: t2, right: '›', onclick: fn, tag: tag || null, tagCls: tag ? 'mid' : '' });
+    const issues = E.dataCheck(m);
+    const hi = issues.filter((x) => x.level !== '低').length;
+    const noOpen = m.accounts.filter((a) => !a.openingAt || a.opening === '').length;
+    main.appendChild(card('お金の置き場所',
+      item('🏦', '口座・カード・電子マネー', m.accounts.length + '口座・' + m.cards.length + '枚（支払い方法の一覧）', () => push('table', { table: 'wallets' })),
+      item('💳', 'カードの締め日・引き落とし', m.cards.map((c) => c.name + ' ' + (c.closeDay === '末' ? '月末' : (c.closeDay || '?') + '日') + '締め' + (c.debitDay || '?') + '日払い').slice(0, 2).join('／') || 'カードがありません', () => push('cards')),
+      item('🧮', '開始残高', noOpen ? '未入力 ' + noOpen + '口座' : 'すべて入力済み', () => push('opening'), noOpen ? '未入力' : null),
+      item('🧾', 'カードの請求額の確定', '明細の金額を入れる・引き落とし不可', () => push('bills'))));
+    main.appendChild(card('入力の決まり',
+      item('🗂', '分類と予算', m.categories.length + '分類・予算 ' + yen(E.month(m, E.ymOf(m.today)).budget), () => push('table', { table: 'categories' })),
+      item('📷', 'レシートの読み取りルール', (d.rules || []).length + '件（品名の文字で分類を決める）', () => push('table', { table: 'rules' })),
+      item('🚃', '交通費の区間・定期券', (d.routes || []).length + '区間・定期 ' + (d.passes || []).length + '枚', () => push('fare', {}))));
+    main.appendChild(card('予定・やること（予定のタブで使うもの）',
+      item('🏠', '毎月の予定（固定費・収入・振替）と年間', m.plansAll.length + '件', () => push('table', { table: 'plans' })),
+      item('📅', '期限とやること', m.deadlines.filter((x) => !x.done).length + '件の期限・' + m.todos.filter((t) => !t.done).length + '件のやること', () => { planTab = 'todo'; go('plan'); }),
+      item('🎉', 'ボーナスと配分', m.bonuses.length + '回', () => { planTab = 'bonus'; go('plan'); })));
     main.appendChild(card('通知（LINE）',
-      item('💬', '通知の文面', '番号ごとの文・重要度・送り先', () => push('table', { table: 'notifyTpl' })),
-      item('⏰', '通知の設定', '時刻・重要度の下限など', () => push('table', { table: 'notifyConf' })),
-      item('👥', 'LINEの送り先', '夫・妻・グループ', () => push('table', { table: 'lineDest' }))));
+      item('💬', '通知の文面と送り先', '番号ごとの文・重要度・オンオフ（10番が月初の振り返り）', () => push('table', { table: 'notifyTpl' })),
+      item('⏰', '通知の設定', '時刻・重要度の下限・振り返りを送る日など', () => push('table', { table: 'notifyConf' })),
+      item('👥', 'LINEの送り先', (d.lineDest || []).filter((x) => x.lineId && x.enabled).map((x) => x.id).join('・') || '未登録', () => push('table', { table: 'lineDest' }))));
     main.appendChild(card('この端末',
-      item('🎨', '表示の設定', '文字の大きさ・色・ホームの項目など', () => push('display')),
+      item('🎨', '表示の設定', '文字の大きさ・色・密度・ホームの構成・入力ショートカット', () => push('display')),
       item('🔄', '保存と同期', syncSummary(), () => push('sync')),
       item('📱', 'この端末の登録', (S.user || (cfg && cfg.n) || '') + 'として登録', () => push('device'))));
+    main.appendChild(card('データ',
+      item('🩺', 'データの点検', issues.length ? (hi ? '確認したいもの ' + hi + '件・' : '') + '全部で ' + issues.length + '件' : 'おかしなところはありません', () => push('check'), hi ? hi + '件' : null)));
+    main.appendChild(h('p', { class: 'note pad center' }, '家計簿 ' + VERSION_LABEL + '（' + APP_VERSION + '）'));
+  }
+
+  /* ---------- カードの締め日・引き落とし（一覧） ---------- */
+  function cardsPage(main) {
+    const m = model();
+    setTitle('カードの締め日・引き落とし');
+    main.appendChild(h('p', { class: 'note pad' }, '使った日によって、どの請求に入り、いつどの口座から引き落とされるかが決まります。押すと、請求ごとの金額と、いま使っている分が見られます。'));
+    const st = E.cardStatus(m);
+    main.appendChild(card(null, st.length ? st.map((c) => {
+      const w = c.card;
+      return row({ icon: '💳', t1: w.name, tag: !w.payFrom ? '口座未設定' : null, tagCls: 'high',
+        t2: [(w.closeDay === '末' ? '月末' : w.closeDay ? w.closeDay + '日' : '締め日未設定') + '締め', (w.debitOffset === '2' ? '翌々月' : '翌月') + (w.debitDay || '?') + '日払い', '→ ' + (walletName(w.payFrom) || '引き落とし口座なし')].join('・'),
+        right: c.next ? h('span', { class: 'col' }, amountEl(c.next.amount, c.next.confirmed ? '' : 'est', { maskable: true }), h('span', { class: 'after' }, md(c.next.debitDate) + (c.next.confirmed ? ' 確定' : ' 見込み'))) : '',
+        onclick: () => push('card', { id: w.id }) });
+    }) : empty('カードがありません'),
+      h('button', { type: 'button', class: 'link', onclick: () => push('edit', { table: 'wallets', id: null, preset: { kind: 'カード' } }) }, '＋ カードを追加')));
+  }
+
+  /* ---------- データの点検 ---------- */
+  function checkPage(main) {
+    const m = model();
+    setTitle('データの点検');
+    const list = E.dataCheck(m);
+    main.appendChild(h('p', { class: 'note pad' }, '記録や設定の、つながりが切れているところ・二重登録の疑い・入れ忘れを探します。自動では直しません。押すと、その行を開きます。'));
+    if (!list.length) { main.appendChild(card(null, h('div', { class: 'check-box ok' }, h('strong', null, '✓ おかしなところはありません'), h('span', null, '記録 ' + m.tx.length + '件・口座とカード ' + m.walletsAll.length + '件・予定 ' + m.plansAll.length + '件を確かめました。')))); return; }
+    const open = (x) => {
+      if (x.table === 'bills') return push('card', { id: x.id });
+      if (x.table === 'tx') { const t = rowOf('tx', x.id); if (t && t.rcpt) return push('receiptView', { rcpt: t.rcpt }); }
+      if (x.table === 'wallets' && x.kind === 'no_opening') return push('opening');
+      push('edit', { table: x.table, id: x.id });
+    };
+    [['高', 'すぐ直したいもの'], ['中', '確認したいもの'], ['低', '気になったら']].forEach(([lv, title]) => {
+      const xs = list.filter((x) => x.level === lv);
+      if (xs.length) main.appendChild(card(title + '（' + xs.length + '件）', xs.slice(0, 60).map((x) => row({ icon: lv === '高' ? '⛔' : lv === '中' ? '⚠️' : '・', t1: x.text, right: '›', cls: 'wrap', onclick: () => open(x) })),
+        xs.length > 60 ? h('p', { class: 'note' }, 'ほか ' + (xs.length - 60) + '件') : null));
+    });
   }
   function syncSummary() { return S.ops.length ? '未送信 ' + S.ops.length + '件' : S.lastSync ? '最終 ' + new Date(S.lastSync).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'まだ'; }
 
@@ -1280,7 +1552,7 @@
     let list = d, groups = null;
     if (p.table === 'wallets' || p.table === 'categories') {
       // 固定（自分の設定）→ よく使う順。使っていないものは下に
-      const cnt = usage(m, p.table === 'wallets' ? 'wallet' : 'category');
+      const cnt = useCount(m, p.table === 'wallets' ? 'wallet' : 'category');
       list = rankBy(d.slice().sort((a, b) => (a.order - b.order) || String(a.name).localeCompare(String(b.name), 'ja')), cnt, p.table)
         .sort((a, b) => (a.active === false) - (b.active === false));
       groups = p.table === 'wallets'
@@ -1317,12 +1589,12 @@
     switch (table) {
       case 'wallets': {
         const b = r.kind !== 'カード' ? E.balances(m)[r.id] : null;
-        const used = usage(m, 'wallet')[r.id] || 0;
+        const used = useCount(m, 'wallet')[r.id] || 0;
         return row({ icon: kindIcon(r.kind), t1: r.name, tag: off || (r._pending ? '未送信' : used ? '90日で' + used + '回' : null), tagCls: r._pending ? 'wait' : '', after: pinBtn('wallets', r.id),
           t2: r.kind === 'カード' ? [(r.closeDay === '末' ? '月末' : r.closeDay ? r.closeDay + '日' : '?') + '締め', (r.debitDay || '?') + '日払い', walletName(r.payFrom) || '引き落とし口座未設定'].join('・') : [r.kind, r.role].filter(Boolean).join('・'),
           right: b ? (b.noOpening ? h('span', { class: 'tag mid' }, '残高未入力') : amountEl(b.balance, '', { maskable: true })) : '›', onclick: go2 });
       }
-      case 'categories': { const used = usage(m, 'category')[r.id] || 0;
+      case 'categories': { const used = useCount(m, 'category')[r.id] || 0;
         return row({ icon: r.icon, t1: r.name, tag: off || (r.group !== '生活費' ? r.group.replace('（あとで戻る）', '') : null), t2: [used ? '90日で' + used + '回' : '最近は使っていない', r.budget ? '予算 ' + yen(r.budget) : ''].filter(Boolean).join('・'), right: '›', onclick: go2, after: pinBtn('categories', r.id) }); }
       case 'plans': return row({ icon: r.kind === '収入' ? '💰' : r.kind === '年間' ? '🗓' : r.kind === '振替' ? '⇄' : '🏠', t1: r.name, tag: r.active === false ? '無効' : r.reserve ? '積立' : r.inBudget === false && r.kind === '固定費' ? '生活費の外' : null,
         t2: [r.months ? r.months.split(',').join('・') + '月' : '毎月', r.day ? r.day + '日' : '', r.kind === '年間' ? (r.every === 0 ? '1回だけ' : r.every > 1 ? r.every + '年ごと' : '') : '', (walletName(r.wallet) || '口座未設定') + (r.kind === '振替' ? ' → ' + (walletName(r.to) || '未設定') : ''), r.start || r.end ? (r.start || '') + '〜' + (r.end || '') : ''].filter(Boolean).join('・'),
@@ -1344,7 +1616,7 @@
   const HIDE = {
     wallets: (f, v) => (f.only === 'card' && v.kind !== 'カード') || (f.only === 'account' && v.kind === 'カード') || f.k === 'openingAt',
     tx: (f, v) => (f.k === 'from' && (v.type === '収入' || v.type === '残高合わせ')) || (f.k === 'to' && v.type === '支出') || (f.k === 'category' && (v.type === '振替' || v.type === '残高合わせ')) || f.k === 'created' || f.k === 'ref' ||
-      ((f.k === 'famt' || f.k === 'fx') && !v.cur) || f.k === 'fxAt' || (f.k === 'cur' && v.type === '残高合わせ'),
+      ((f.k === 'famt' || f.k === 'fx') && !v.cur) || f.k === 'fxAt' || f.k === 'rcpt' || (f.k === 'cur' && v.type === '残高合わせ'),
     allocs: (f, v) => f.k === 'category' && !!v.to,
     plans: (f, v) => (f.k === 'every' && v.kind !== '年間') || (f.k === 'reserve' && v.kind !== '年間') || (f.k === 'inBudget' && (v.kind === '収入' || v.kind === '振替')) ||
       (f.k === 'to' && v.kind !== '振替') || (f.k === 'category' && v.kind === '振替')
@@ -1422,29 +1694,40 @@
     };
     R.guard = { form: true, dirty: () => JSON.stringify(v) !== orig, save: save };
 
+    const receiptCard = p.table === 'tx' && cur && cur.rcpt ? (() => {
+      const all = (data().items || []).filter((it) => it.rcpt === cur.rcpt);
+      if (!all.length) return null;
+      const mine = all.filter((it) => it.tx === cur.id), other = all.filter((it) => it.tx !== cur.id);
+      const sib = (data().tx || []).filter((t) => t.rcpt === cur.rcpt && t.id !== cur.id);
+      const itRow = (it) => { const c = catOf(it.category); return row({ icon: c ? c.icon : '・', t1: it.name, t2: (c ? c.name : '分類なし') + (it.reduced ? '・8%' : ''), right: amountEl(-(Number(it.price) || 0)),
+        onclick: () => push('edit', { table: 'items', id: it.id }) }); };
+      return card('レシートの内訳（' + all.length + '品目）',
+        mine.length ? mine.map(itRow) : null,
+        h('p', { class: 'note' }, 'レシートに印字された金額です。合計との差（税・値引き）は、記録の金額に含めています。品目を押すと分類を直せます（期間集計の分け方に反映されます）。'),
+        sib.length ? h('details', { class: 'raw' }, h('summary', null, '同じレシートのほかの記録（' + sib.length + '件）・品目（' + other.length + '件）'),
+          sib.map((t) => txRow(t)), other.map(itRow)) : null);
+    })() : null;
     main.appendChild(card(null, form, err,
       h('div', { class: 'form-acts' },
         h('button', { type: 'button', onclick: back }, 'キャンセル'),
         !isNew && !sc.fixedRows ? h('button', { type: 'button', class: 'danger', onclick: async () => {
-          const why = usage(p.table, p.id, m);
+          const why = deleteBlock(p.table, p.id);
           if (why) { await ask('削除できません', why, [{ v: 1, label: 'わかった' }]); return; }
           if (!(await confirmDel('「' + (cur.name || cur.item || cur.memo || md(cur.date) || '') + '」を削除します。'))) return;
           const old = stripMeta(cur);
-          del(p.table, p.id); R.guard = null; toast('削除しました', { undo: () => { put(p.table, old); toast('元に戻しました'); } }); back();
+          const oldItems = p.table === 'tx' ? (data().items || []).filter((it) => it.tx === p.id).map(stripMeta) : [];
+          del(p.table, p.id); oldItems.forEach((it) => del('items', it.id));
+          R.guard = null; toast('削除しました' + (oldItems.length ? '（品目 ' + oldItems.length + '件も）' : ''), { undo: () => { put(p.table, old); oldItems.forEach((it) => put('items', it)); toast('元に戻しました'); } }); back();
         } }, '削除') : null,
         h('button', { type: 'button', class: 'primary', onclick: save }, '保存'))));
+    if (receiptCard) main.appendChild(receiptCard);
   }
 
-  function usage(table, id, m) {
-    if (table === 'wallets') {
-      const n = m.tx.filter((t) => t.from === id || t.to === id).length + m.plansAll.filter((p) => p.wallet === id).length + m.cards.filter((c) => c.payFrom === id).length;
-      return n ? 'この口座・カードは、記録や予定など ' + n + ' 件で使われています。削除せず「使っている」のチェックを外してください（一覧や入力に出なくなります）。' : '';
-    }
-    if (table === 'categories') {
-      const n = m.tx.filter((t) => t.category === id).length + m.plansAll.filter((p) => p.category === id).length;
-      return n ? 'この分類は ' + n + ' 件の記録・予定で使われています。削除せず「使っている」のチェックを外してください。' : '';
-    }
-    if (table === 'bonuses') { const n = m.allocs.filter((a) => a.bonus === id).length; return n ? '配分が ' + n + ' 件あります。先に配分を削除してください。' : ''; }
+  function deleteBlock(table, id) {
+    const r = E.refsTo(data(), table, id);
+    if (!r.count) return '';
+    if (table === 'wallets' || table === 'categories') return 'ほかのデータで使われています（' + r.where.join('・') + '）。削除すると、それらのつながりが切れます。削除せず「使っている」のチェックを外してください（一覧や入力に出なくなります）。';
+    if (table === 'bonuses') return '配分が ' + r.count + ' 件あります。先に配分を削除してください。';
     return '';
   }
   const stripMeta = (r) => { const o = Object.assign({}, r); delete o._at; delete o._by; delete o._pending; return o; };
@@ -1561,7 +1844,7 @@
       h('div', { class: 'flabel' }, '登録したあと'), seg([['stay', '入力画面のまま'], ['home', 'ホームに戻る']], UI.afterSave, (v) => set('afterSave', v))));
     main.appendChild(card('開いたとき', seg([['home', 'ホーム'], ['input', '入力']], UI.start, (v) => set('start', v)),
       h('div', { class: 'flabel' }, '予定の見通し'), seg([[31, '1か月'], [62, '2か月'], [93, '3か月']], UI.days, (v) => set('days', v)),
-      h('div', { class: 'flabel' }, '明細の並び'), seg([['new', '新しい順'], ['old', '古い順']], UI.listOrder, (v) => set('listOrder', v))));
+      h('div', { class: 'flabel' }, '入力履歴の並び'), seg([['new', '新しい順'], ['old', '古い順']], UI.listOrder, (v) => set('listOrder', v))));
     const homeBox = h('div');
     const drawHome = () => {
       clear(homeBox);
@@ -1576,6 +1859,20 @@
     };
     drawHome();
     main.appendChild(card('ホームに出す項目と順番', homeBox));
+    const qBox = h('div');
+    const drawQ = () => {
+      clear(qBox);
+      const order = UI.quick.concat(QUICK.map((q) => q[0]).filter((k) => UI.quick.indexOf(k) < 0));
+      order.forEach((k) => {
+        const q = QUICK.find((x) => x[0] === k); if (!q) return;
+        const on = UI.quick.indexOf(k) >= 0;
+        const move = (d) => { const arr = UI.quick.slice(); const j = arr.indexOf(k); const t = j + d; if (j < 0 || t < 0 || t >= arr.length) return; arr.splice(j, 1); arr.splice(t, 0, k); UI.quick = arr; saveUI(); drawQ(); };
+        qBox.appendChild(h('div', { class: 'row' }, h('label', { class: 'check grow' }, h('input', { type: 'checkbox', checked: on, onchange: (e) => { UI.quick = e.target.checked ? UI.quick.concat([k]) : UI.quick.filter((x) => x !== k); saveUI(); drawQ(); } }), h('span', null, q[1] + ' ' + q[2])),
+          on ? h('span', { class: 'updown' }, h('button', { type: 'button', 'aria-label': '上へ', onclick: () => move(-1) }, '↑'), h('button', { type: 'button', 'aria-label': '下へ', onclick: () => move(1) }, '↓')) : null));
+      });
+    };
+    drawQ();
+    main.appendChild(card('入力のショートカット（ホームのいちばん上）', qBox, h('p', { class: 'note' }, '押すと、その種類で入力画面が開きます。レシートはすぐにカメラ・写真が開きます。')));
     main.appendChild(card('動き', h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: UI.motion, onchange: (e) => set('motion', e.target.checked) }), h('span', null, '画面の動き（アニメーション）を使う'))));
     main.appendChild(h('button', { type: 'button', class: 'link center', onclick: () => { UI = Object.assign({}, UI_DEF); saveUI(); refresh(); toast('表示の設定を元に戻しました'); } }, '表示の設定を元に戻す'));
   }
@@ -1630,7 +1927,7 @@
       h('button', { type: 'button', class: 'save-btn', onclick: async () => { S.forceFull = true; await flush(); if (S.inflight) await S.inflight; toast(S.error ? '読み込めませんでした：' + S.error : '読み直しました'); render(true); } }, '読み直す')));
   }
 
-  const TABS = { home: homePage, input: inputPage, list: listPage, plan: planPage, manage: managePage };
+  const TABS = { home: homePage, input: inputPage, list: listPage, analysis: analysisPage, plan: planPage, manage: managePage };
   /* ================= レシート ================= */
   function fileToJpeg(file) {
     return new Promise((res, rej) => {
@@ -1872,10 +2169,20 @@
         const parts = oneLine ? [{ category: p.defaults.food, amount: Number(S2.total) || S2.items.reduce((a, it) => a + (Number(it.price) || 0), 0) }] : E.splitByCategory(S2.items, Number(S2.total) || 0, pr.taxExcluded, Number(S2.total) === pr.total ? pr.rates : null);
         if (!parts.length || parts.some((x) => !(x.amount > 0))) throw new Error('金額が正しくありません。合計か品目の金額を確かめてください。');
         if (!S2.from) throw new Error('支払い（口座・カード）を選んでください。');
-        const ref = rid('rc');
+        const rcpt = rid('rc');
         const memo = (S2.store || 'レシート').trim();
-        parts.forEach((x) => put('tx', { id: rid('t'), date: S2.date || m.today, type: '支出', amount: x.amount, category: x.category, from: S2.from, to: '', memo: memo,
-          user: S.user, settle: (catOf(x.category) || {}).group === '立替（あとで戻る）' ? '未精算' : '', ref: '', created: nowStr() }));
+        const created = nowStr();
+        const txOfCat = {};
+        parts.forEach((x) => {
+          const id = rid('t');
+          txOfCat[x.category] = id;
+          put('tx', { id: id, date: S2.date || m.today, type: '支出', amount: x.amount, category: x.category, from: S2.from, to: '', memo: memo,
+            user: S.user, settle: (catOf(x.category) || {}).group === '立替（あとで戻る）' ? '未精算' : '', ref: '', created: created, rcpt: rcpt });
+        });
+        // 品目（内訳）を残す。分けたときは品目の分類の記録に、まとめたときはその1件の記録につなぐ
+        const one = oneLine ? txOfCat[parts[0].category] : '';
+        S2.items.filter((it) => String(it.name || '').trim()).forEach((it) => put('items', { id: rid('it'), rcpt: rcpt, tx: one || txOfCat[it.category] || '',
+          date: S2.date || m.today, store: memo, name: String(it.name).trim().slice(0, 100), price: Math.round(Number(it.price) || 0), category: it.category || '', reduced: !!it.reduced }));
         if (S2.learn && !oneLine) {
           S2.items.filter((it) => it.category !== it.auto && it.name.trim()).forEach((it) => {
             const key = E.normText(it.name).replace(/\d+(ml|mL|ML|g|kg|L|l|個|本|缶|入|枚|R|m)?/g, '').replace(/[\s()（）\[\]×x*]/g, '').slice(0, 15);
@@ -1884,7 +2191,7 @@
         }
         prefs.lastFrom = S2.from; savePrefs();
         R.guard = null;
-        toast(parts.length + '件に分けて登録しました（' + memo + '）');
+        toast((oneLine ? '1件で登録しました（' : parts.length + '件に分けて登録しました（') + memo + '・品目 ' + S2.items.filter((it) => String(it.name || '').trim()).length + '件の内訳つき）');
         back();
         return true;
       } catch (e) { toast(e.message, { error: true }); return false; }
@@ -1917,10 +2224,20 @@
     toast(next ? '「' + t.title + '」を済みにしました' : '未完了に戻しました', next ? { undo: () => put('todos', Object.assign({}, stripMeta(t), { done: false, doneAt: '' })) } : {});
   }
   function todosPage(main) {
-    const m = model();
-    setTitle('やることリスト');
+    setTitle('やること・期限');
+    todoSection(main, model(), true);
+  }
+  function todoSection(main, m, withDeadlines) {
+    // 期限（手続き・更新など。LINEで前もって知らせる）
+    if (withDeadlines) {
+      const dl = m.deadlines.slice().sort((a, b) => (a.done - b.done) || String(a.date || '9').localeCompare(String(b.date || '9')));
+      const openDl = dl.filter((d) => !d.done);
+      main.appendChild(card('期限（' + openDl.length + '件）', openDl.length ? openDl.slice(0, 8).map((r) => summaryRow('deadlines', r, m)) : empty('期限はありません'),
+        h('div', { class: 'btns' }, h('button', { type: 'button', onclick: () => push('edit', { table: 'deadlines', id: null }) }, '＋ 期限を追加'),
+          dl.length > openDl.slice(0, 8).length ? h('button', { type: 'button', onclick: () => push('table', { table: 'deadlines' }) }, 'すべての期限（' + dl.length + '）') : null)));
+    }
     const open = m.todos.filter((t) => !t.done), done = m.todos.filter((t) => t.done);
-    main.appendChild(card(null, h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, '残り'), h('div', { class: 'big' }, open.length + '件')),
+    main.appendChild(card('やることリスト', h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, '残り'), h('div', { class: 'big' }, open.length + '件')),
       h('div', { class: 'r' }, h('div', { class: 'lbl' }, '済み'), h('div', { class: 'v' }, done.length + '件'))), bar(m.todos.length ? done.length / m.todos.length : 0)));
     // すぐ追加
     const input = h('input', { type: 'text', placeholder: 'やることを入れて追加', maxlength: '200', enterkeyhint: 'done' });
@@ -1941,7 +2258,7 @@
     main.appendChild(h('button', { type: 'button', class: 'link center', onclick: () => push('edit', { table: 'todos', id: null }) }, '＋ 期限やメモをつけて追加'));
   }
 
-  const PAGES = { fare: farePage, receipt: receiptPage, todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
+  const PAGES = { cards: cardsPage, check: checkPage, receiptView: receiptViewPage, fare: farePage, receipt: receiptPage, todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
 
   /* ================= 登録画面 ================= */
   function showSetup(msg) {
@@ -1966,6 +2283,14 @@
     if (R.stack.length || R.tab !== 'input' || $('#layer').firstChild) return;
     const tag = (e.target && e.target.tagName) || '';
     if (/INPUT|TEXTAREA|SELECT/.test(tag)) { if (e.key === 'Enter' && e.target.classList.contains('memo')) saveInput(false); return; }
+    if (st.cur === 'USD') {
+      // ドル：数字と小数点（小数は2けたまで）
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); if (st.usd.length < 10 && !/\.\d\d$/.test(st.usd)) { st.usd = (st.usd === '0' ? '' : st.usd) + e.key; refresh(); } }
+      else if (e.key === '.') { e.preventDefault(); if (st.usd.indexOf('.') < 0) { st.usd = (st.usd || '0') + '.'; refresh(); } }
+      else if (e.key === 'Backspace') { e.preventDefault(); st.usd = st.usd.slice(0, -1); refresh(); }
+      else if (e.key === 'Enter') { e.preventDefault(); saveInput(false); }
+      return;
+    }
     if (/^[0-9]$/.test(e.key)) { e.preventDefault(); if ((st.amount + e.key).length <= 9) { st.amount = st.amount === '' && e.key === '0' ? '' : st.amount + e.key; refresh(); } }
     else if (e.key === 'Backspace') { e.preventDefault(); st.amount = st.amount.slice(0, -1); refresh(); }
     else if (e.key === 'Enter') { e.preventDefault(); saveInput(false); }

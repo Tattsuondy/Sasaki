@@ -66,7 +66,9 @@ var Engine = (function () {
         { k: 'cur', label: '通貨', type: 'select', opts: ['', 'USD'] },
         { k: 'famt', label: '外貨の金額（ドル）', type: 'dec', dp: 2, fmt: '#,##0.00' },
         { k: 'fx', label: 'レート（1ドル＝円）', type: 'dec', dp: 4, fmt: '0.00##' },
-        { k: 'fxAt', label: 'レートの時点', type: 'text' }
+        { k: 'fxAt', label: 'レートの時点', type: 'text' },
+        // レシートから登録した記録：同じレシートの記録（分けて登録したもの）と品目をつなぐ
+        { k: 'rcpt', label: 'レシートID', type: 'text' }
       ]
     },
     bills: {
@@ -195,6 +197,20 @@ var Engine = (function () {
         { k: 'doneAt', label: '済ませた日時', type: 'datetime', ro: true },
         { k: 'order', label: '並び順', type: 'int', def: 50 },
         { k: 'memo', label: 'メモ', type: 'longtext' }
+      ]
+    },
+    items: {
+      sheet: 'レシートの品目', label: 'レシートの品目（内訳）', prefix: 'it',
+      fields: [
+        { k: 'id', type: 'id' },
+        { k: 'rcpt', label: 'レシートID', type: 'text', req: true },
+        { k: 'tx', label: '記録ID', type: 'text' },
+        { k: 'date', label: '日付', type: 'date' },
+        { k: 'store', label: 'お店', type: 'text' },
+        { k: 'name', label: '品名', type: 'text', req: true },
+        { k: 'price', label: '金額（レシートの表示）', type: 'sint' },
+        { k: 'category', label: '分類', type: 'ref', ref: 'categories' },
+        { k: 'reduced', label: '軽減税率（8%）', type: 'bool', def: false }
       ]
     },
     passes: {
@@ -823,7 +839,9 @@ var Engine = (function () {
       const list = Object.keys(all).map((k) => all[k]).filter((b) => b.card === card.id).sort((a, b) => a.debitDate.localeCompare(b.debitDate));
       const upcoming = list.filter((b) => b.debitDate > m.today && (b.amount !== 0 || !b.confirmed));
       const failed = list.filter((b) => b.status === '引き落とし不可');
-      const paid = m.tx.filter((t) => t.type === '振替' && t.to === card.id).reduce((s, t) => s + t.amount, 0);
+      // 引き落とせなかった請求を払った分：いちばん古い「引き落とし不可」の引き落とし日より後の、このカードへの振替だけ
+      const firstFail = failed.length ? failed.map((b) => b.debitDate).sort()[0] : null;
+      const paid = firstFail ? m.tx.filter((t) => t.type === '振替' && t.to === card.id && t.date >= firstFail).reduce((s, t) => s + t.amount, 0) : 0;
       const owed = upcoming.filter((b) => b.status !== '引き落とし不可').reduce((s, b) => s + b.amount, 0) +
         Math.max(0, failed.reduce((s, b) => s + b.amount, 0) - paid);
       const cur = cycleOf(card, m.today);
@@ -975,25 +993,15 @@ var Engine = (function () {
 
   /* ================= 月の集計 ================= */
   function month(m, ym) {
-    const txs = m.tx.filter((t) => ymOf(t.date) === ym);
+    // 分類の合計は期間集計（summary）と同じ計算にそろえる（まとめて登録したレシートも品目の分類で分ける）
+    const sm = summary(m, ym + '-01', ym + '-' + pad(dimOf(ym)), { byItems: true });
+    const txs = m.tx.filter((t) => ymOf(t.date) === ym);   // 一覧用：振替・残高合わせも含めた、その月のすべての記録
     const cats = {};
     m.categoriesAll.forEach((c) => { cats[c.id] = { id: c.id, name: c.name, icon: c.icon, kind: c.kind, group: c.group, budget: c.budget === '' ? null : Number(c.budget), total: 0, count: 0 }; });
     const none = { id: '', name: '分類なし', icon: '・', kind: '支出', group: '生活費', budget: null, total: 0, count: 0 };
-    let expense = 0, income = 0, household = 0, outside = 0, tatekae = 0;
-    const byUser = {}, byWallet = {};
-    txs.forEach((t) => {
-      if (t.type !== '支出' && t.type !== '収入') return;
-      const c = cats[t.category] || none;
-      c.total += t.amount; c.count++;
-      if (t.type === '支出') {
-        expense += t.amount;
-        if (c.group === '立替（あとで戻る）') tatekae += t.amount;
-        else if (c.group === '生活費の外') outside += t.amount;
-        else household += t.amount;
-        byUser[t.user || '不明'] = (byUser[t.user || '不明'] || 0) + t.amount;
-        byWallet[t.from] = (byWallet[t.from] || 0) + t.amount;
-      } else income += t.amount;
-    });
+    sm.expenseCats.concat(sm.incomeCats).forEach((x) => { const c = cats[x.id] || none; c.total += x.total; c.count += x.count; });
+    const expense = sm.expense, income = sm.income, household = sm.household, outside = sm.outside, tatekae = sm.tatekae;
+    const byUser = sm.byUser, byWallet = sm.byWallet;
     const list = Object.keys(cats).map((k) => cats[k]).concat(none.count ? [none] : []);
     const expenseCats = list.filter((c) => c.kind === '支出' && (c.total || c.budget)).sort((a, b) => b.total - a.total);
     const incomeCats = list.filter((c) => c.kind === '収入' && c.total).sort((a, b) => b.total - a.total);
@@ -1019,6 +1027,11 @@ var Engine = (function () {
   function summary(m, from, to, opt) {
     opt = opt || {};
     const txs = m.tx.filter((t) => t.date >= from && t.date <= to && (t.type === '支出' || t.type === '収入') && (!opt.user || t.user === opt.user));
+    // レシートの品目（内訳）を記録ごとに
+    const itemsOf = {};
+    (m.data.items || []).forEach((it) => { if (it.tx) (itemsOf[it.tx] = itemsOf[it.tx] || []).push(it); });
+    const itemNames = {};
+    let splitByItems = 0;
     const cats = {};
     const none = { id: '', name: '分類なし', icon: '・', kind: '支出', group: '生活費' };
     const catOf = (t) => {
@@ -1029,21 +1042,43 @@ var Engine = (function () {
     const byMonth = {}, byUser = {}, byWallet = {}, byMemo = {};
     let expense = 0, income = 0, household = 0, outside = 0, tatekae = 0, count = 0;
     txs.forEach((t) => {
-      const c = catOf(t), ym = ymOf(t.date);
-      c.total += t.amount; c.count++; c.byMonth[ym] = (c.byMonth[ym] || 0) + t.amount; c.tx.push(t);
+      const ym = ymOf(t.date);
+      const its = itemsOf[t.id] || [];
+      // 品目の名前ごとの合計（レシートに印字された金額）
+      if (t.type === '支出') its.forEach((it) => {
+        const nm = String(it.name || '').trim(); if (!nm) return;
+        const b = itemNames[nm] || (itemNames[nm] = { name: nm, category: it.category, total: 0, count: 0 });
+        b.total += Number(it.price) || 0; b.count++;
+      });
+      // まとめて1件で登録したレシートでも、品目の分類で分けて数える（opt.byItems が false でなければ）
+      let shares = [{ category: t.category, amount: t.amount }];
+      if (opt.byItems !== false && t.type === '支出' && its.length && its.some((it) => it.category && it.category !== t.category)) {
+        const list = its.map((it) => ({ price: Number(it.price) || 0, category: it.category || t.category, reduced: it.reduced === true }));
+        const sum = list.reduce((a, it) => a + it.price, 0);
+        const taxEx = sum > 0 && sum < t.amount * 0.97;   // 品目の合計が支払額より少ない＝税抜きの表示とみなし、8%・10%で重みを付ける
+        const sp = splitByCategory(list, t.amount, taxEx, null);
+        if (sp.length && sp.reduce((a, x) => a + x.amount, 0) === t.amount) { shares = sp; splitByItems++; }
+      }
+      shares.forEach((sh) => {
+        const c = catOf({ category: sh.category, type: t.type });
+        c.total += sh.amount; c.count++; c.byMonth[ym] = (c.byMonth[ym] || 0) + sh.amount;
+        c.tx.push(shares.length > 1 ? Object.assign({}, t, { _part: sh.amount }) : t);
+        if (t.type === '支出') {
+          if (c.group === '立替（あとで戻る）') tatekae += sh.amount;
+          else if (c.group === '生活費の外') outside += sh.amount;
+          else { household += sh.amount; (byMonth[ym] = byMonth[ym] || { expense: 0, income: 0, household: 0 }).household += sh.amount; }
+        }
+      });
       const bm = byMonth[ym] || (byMonth[ym] = { expense: 0, income: 0, household: 0 });
       if (t.type === '支出') {
         count++; expense += t.amount; bm.expense += t.amount;
-        if (c.group === '立替（あとで戻る）') tatekae += t.amount;
-        else if (c.group === '生活費の外') outside += t.amount;
-        else { household += t.amount; bm.household += t.amount; }
         byUser[t.user || '不明'] = (byUser[t.user || '不明'] || 0) + t.amount;
         byWallet[t.from || ''] = (byWallet[t.from || ''] || 0) + t.amount;
         const memo = String(t.memo || '').replace(/（.*?）|\(.*?\)/g, '').trim().slice(0, 24);
         if (memo) {
           // レシートを分類ごとに分けた記録は、同じ日・同じ登録日時なので「1回の買い物」として数える
           const b = byMemo[memo] || (byMemo[memo] = { memo: memo, total: 0, count: 0, seen: {} });
-          const visit = t.date + '|' + (t.created || t.id);
+          const visit = t.rcpt || (t.date + '|' + (t.created || t.id));
           b.total += t.amount; if (!b.seen[visit]) { b.seen[visit] = true; b.count++; }
         }
       } else { income += t.amount; bm.income += t.amount; }
@@ -1061,8 +1096,102 @@ var Engine = (function () {
       incomeCats: list.filter((c) => c.kind === '収入').sort((a, b) => b.total - a.total),
       byMonth: byMonth, byUser: byUser, byWallet: byWallet,
       byMemo: Object.keys(byMemo).map((k) => byMemo[k]).sort((a, b) => b.total - a.total),
+      items: Object.keys(itemNames).map((k) => itemNames[k]).sort((a, b) => b.total - a.total),
+      splitByItems: splitByItems,
       tx: txs
     };
+  }
+
+  /** 今月の予算の残り（生活費の分類の予算の合計から）。catId を渡すと、その分類だけ */
+  function budgetLeft(m, catId) {
+    const ym = ymOf(m.today), s = month(m, ym);
+    const dim = dimOf(ym), daysLeft = dim - (+m.today.slice(8, 10)) + 1;   // 今日を含む
+    let budget, used;
+    if (catId) { const c = s.expenseCats.find((x) => x.id === catId) || (m.c[catId] ? { budget: m.c[catId].budget === '' ? null : Number(m.c[catId].budget), total: 0 } : null); if (!c || !c.budget) return null; budget = c.budget; used = c.total; }
+    else { budget = s.budget; used = s.household; if (!budget) return null; }
+    const left = budget - used;
+    return { budget: budget, used: used, left: left, daysLeft: daysLeft, perDay: left > 0 ? Math.floor(left / daysLeft) : 0, ratio: budget ? used / budget : 0, dayRatio: s.dayRatio };
+  }
+
+  /** この行を使っているところ（削除してよいかの確認用）。{ count, where:[] } */
+  function refsTo(data, table, id) {
+    const where = [];
+    const n = (label, list) => { if (list.length) where.push(label + ' ' + list.length + '件'); return list.length; };
+    let c = 0;
+    const d = (t) => data[t] || [];
+    if (table === 'wallets') {
+      c += n('記録', d('tx').filter((t) => t.from === id || t.to === id));
+      c += n('予定', d('plans').filter((p) => p.wallet === id || p.to === id));
+      c += n('カードの引き落とし口座', d('wallets').filter((w) => w.payFrom === id));
+      c += n('ボーナスの入金口座', d('bonuses').filter((b) => b.wallet === id));
+      c += n('ボーナスの配分', d('allocs').filter((a) => a.to === id));
+      c += n('交通費の区間', d('routes').filter((r) => r.wallet === id));
+      c += n('カードの請求', d('bills').filter((b) => b.card === id));
+    }
+    if (table === 'categories') {
+      c += n('記録', d('tx').filter((t) => t.category === id));
+      c += n('予定', d('plans').filter((p) => p.category === id));
+      c += n('ボーナスの配分', d('allocs').filter((a) => a.category === id));
+      c += n('レシートの品目', d('items').filter((i) => i.category === id));
+      c += n('読み取りルール', d('rules').filter((r) => r.category === id));
+      c += n('交通費の区間', d('routes').filter((r) => r.category === id));
+    }
+    if (table === 'bonuses') c += n('配分', d('allocs').filter((a) => a.bonus === id));
+    return { count: c, where: where };
+  }
+
+  /**
+   * データの点検：おかしなところを見つけて一覧にする（直すのは人）
+   * 戻り値：[{ level:'高'|'中'|'低', kind, text, table, id }]
+   */
+  function dataCheck(m) {
+    const data = m.data, out = [];
+    const add = (level, kind, text, table, id) => out.push({ level: level, kind: kind, text: text, table: table, id: id });
+    const W = {}, C = {}, T = {};
+    (data.wallets || []).forEach((w) => { W[w.id] = w; });
+    (data.categories || []).forEach((c) => { C[c.id] = c; });
+    (data.tx || []).forEach((t) => { T[t.id] = t; });
+    const label = (t) => md(t.date) + ' ' + (t.memo || t.type) + ' ' + yen(t.amount);
+    (data.tx || []).forEach((t) => {
+      if (t.from && !W[t.from]) add('高', 'missing_wallet', '記録「' + label(t) + '」の支払い元の口座・カードが見つかりません。', 'tx', t.id);
+      if (t.to && !W[t.to]) add('高', 'missing_wallet', '記録「' + label(t) + '」の入れ先の口座・カードが見つかりません。', 'tx', t.id);
+      if (t.category && !C[t.category]) add('中', 'missing_cat', '記録「' + label(t) + '」の分類が見つかりません。', 'tx', t.id);
+      if ((t.type === '支出' || t.type === '収入') && !t.category) add('低', 'no_cat', '記録「' + label(t) + '」に分類がありません（集計で「分類なし」になります）。', 'tx', t.id);
+    });
+    // 同じ日・同じ金額・同じ支払い元・同じメモの記録が、数分以内に2回登録されている（二重登録の疑い）
+    const seen = {};
+    (data.tx || []).slice().sort((a, b) => String(a.created).localeCompare(String(b.created))).forEach((t) => {
+      if (t.rcpt || t.ref) return;
+      const k = [t.date, t.type, t.amount, t.from, t.to, t.memo].join('|');
+      const prev = seen[k];
+      if (prev && t.created && prev.created && Math.abs(Date.parse(t.created.replace(' ', 'T')) - Date.parse(prev.created.replace(' ', 'T'))) < 10 * 60 * 1000)
+        add('中', 'dup', '「' + label(t) + '」が2回登録されているかもしれません（' + String(prev.created).slice(11, 16) + ' と ' + String(t.created).slice(11, 16) + '）。', 'tx', t.id);
+      seen[k] = t;
+    });
+    (data.plans || []).forEach((p) => {
+      if (p.active === false) return;
+      if (p.wallet && !W[p.wallet]) add('高', 'missing_wallet', '予定「' + p.name + '」の口座・カードが見つかりません。', 'plans', p.id);
+      if (!p.wallet) add('中', 'plan_nowallet', '予定「' + p.name + '」の支払い元（入金先）が未設定です（見通しに入りません）。', 'plans', p.id);
+      if (p.kind === '振替' && p.to && !W[p.to]) add('高', 'missing_wallet', '予定「' + p.name + '」の移す先が見つかりません。', 'plans', p.id);
+    });
+    (data.wallets || []).forEach((w) => {
+      if (w.active === false) return;
+      if (w.kind === 'カード') {
+        if (!w.payFrom) add('中', 'card_nopay', w.name + 'の引き落とし口座が未設定です。', 'wallets', w.id);
+        else if (!W[w.payFrom]) add('高', 'missing_wallet', w.name + 'の引き落とし口座が見つかりません。', 'wallets', w.id);
+        if (!w.debitDay) add('低', 'card_noday', w.name + 'の引き落とし日が未設定です（27日として計算しています）。', 'wallets', w.id);
+      } else if (!w.openingAt || w.opening === '') add('中', 'no_opening', w.name + 'の開始残高がまだです（残高を計算できません）。', 'wallets', w.id);
+    });
+    (data.items || []).forEach((it) => { if (it.tx && !T[it.tx]) add('低', 'orphan_item', 'レシートの品目「' + it.name + '」の記録が削除されています（品目だけ残っています）。', 'items', it.id); });
+    (data.allocs || []).forEach((a) => { if (a.to && !W[a.to]) add('中', 'missing_wallet', 'ボーナスの配分「' + a.item + '」の移し先が見つかりません。', 'allocs', a.id); });
+    (data.routes || []).forEach((r) => { if (r.wallet && !W[r.wallet]) add('低', 'missing_wallet', '交通費の区間「' + r.from + '→' + r.to + '」のいつもの支払いが見つかりません。', 'routes', r.id); });
+    const all = bills(m);
+    Object.keys(all).forEach((k) => {
+      const b = all[k], ago = diffDays(b.debitDate, m.today);
+      if (!b.confirmed && b.status === '自動' && ago >= 1 && ago <= 45 && b.used) add('低', 'bill_unconfirmed', b.cardName + 'の' + md(b.debitDate) + '分の請求額が未確定です（記録から ' + yen(b.amount) + ' で計算）。', 'bills', b.card);
+    });
+    const order = { '高': 0, '中': 1, '低': 2 };
+    return out.sort((a, b) => order[a.level] - order[b.level]);
   }
 
   function tatekaeOpen(m) {
@@ -1163,7 +1292,7 @@ var Engine = (function () {
     pad: pad, toDateStr: toDateStr, addDays: addDays, diffDays: diffDays, ymOf: ymOf, addMonths: addMonths, dateIn: dateIn, dimOf: dimOf, weekday: weekday,
     isAccount: isAccount, isCard: isCard, build: build, cycleOf: cycleOf, bills: bills, cardStatus: cardStatus, balances: balances,
     planOccurs: planOccurs, planRef: planRef, occurrences: occurrences, nextOccurrence: nextOccurrence, projection: projection,
-    month: month, summary: summary, tatekaeOpen: tatekaeOpen, annual: annual, bonusView: bonusView, alerts: alerts,
+    month: month, summary: summary, budgetLeft: budgetLeft, refsTo: refsTo, dataCheck: dataCheck, tatekaeOpen: tatekaeOpen, annual: annual, bonusView: bonusView, alerts: alerts,
     yen: yen, md: md, afterText: afterText, normText: normText, parseReceipt: parseReceipt, classifyReceipt: classifyReceipt, checkReceipt: checkReceipt, splitByCategory: splitByCategory,
     fxYen: fxYen, usd: usd, passStations: passStations, stationKey: stationKey
   };

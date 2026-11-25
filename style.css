@@ -291,8 +291,7 @@ textarea { resize: vertical; min-height: 4.5rem; }
 details.raw { margin: 0.5rem; color: var(--muted); font-size: 0.8rem; }
 details.raw pre { white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.6rem; max-height: 20rem; overflow: auto; }
 
-/* 管理ボタンの下の版の表示 */
-nav#nav .ver { display: block; font-size: 0.55rem; line-height: 1; letter-spacing: .02em; opacity: .55; font-weight: 400; margin-top: 0.05rem; }
+
 
 .check-box { display: flex; flex-direction: column; gap: 0.2rem; border-radius: 0.8rem; padding: 0.7rem 0.8rem; margin: 0.6rem 0; font-size: 0.85rem; }
 .check-box.ok { background: var(--accent-weak); color: var(--fg); }
@@ -343,3 +342,74 @@ nav#nav .ver { display: block; font-size: 0.55rem; line-height: 1; letter-spacin
 .month-bars .bar { height: 0.35rem; margin: 0; }
 .month-bars .mv { text-align: right; font-variant-numeric: tabular-nums; }
 .cat-tx .row { padding-left: 0; padding-right: 0; }
+
+/* レシートの内訳 */
+.cat-items { margin: 0.2rem 0 0.5rem; padding: 0.4rem 0.5rem; background: var(--panel); border-radius: 8px; }
+.cat-items .flabel { font-size: 0.72rem; margin-bottom: 0.2rem; }
+.ci-row { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.82rem; padding: 0.12rem 0; font-variant-numeric: tabular-nums; }
+.part-note { font-size: 0.72rem; color: var(--muted); text-align: right; margin: -0.3rem 0 0.3rem; }
+
+/* 入力履歴：レシートの内容 */
+.rv-group { margin-bottom: 0.4rem; }
+.rv-head { display: flex; justify-content: space-between; font-weight: 800; font-size: 0.85rem; padding: 0.4rem 0 0.1rem; border-bottom: 2px solid var(--line); }
+/* 分類×月の表 */
+.mtable-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.2rem; }
+.mtable { border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mtable th, .mtable td { padding: 0.35rem 0.5rem; text-align: right; border-bottom: 1px solid var(--line); }
+.mtable th { font-size: 0.72rem; color: var(--muted); font-weight: 700; }
+.mtable .sticky { position: sticky; left: 0; background: var(--panel); text-align: left; z-index: 1; }
+.mtable td.zero { color: var(--muted); }
+.mtable .tot { font-weight: 800; }
+.mtable tr.foot td { font-weight: 800; border-top: 2px solid var(--line); }
+
+
+/* ================= v3：構成の見直し ================= */
+/* 右上の歯車（管理）と、その下の版の表示 */
+.gear { position: relative; border: 0; background: none; color: var(--muted); padding: 0.15rem 0.1rem 0.55rem; display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
+.gear svg { width: 1.45rem; height: 1.45rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.gear.on { color: var(--accent); }
+.gear .ver { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); font-size: 0.5rem; line-height: 1; letter-spacing: .02em; opacity: .6; white-space: nowrap; }
+
+/* 下のタブ：真ん中の「入力」は丸い大きなボタン */
+nav#nav button.fab { position: relative; }
+nav#nav .fab-in { width: 3.1rem; height: 3.1rem; margin-top: -1.35rem; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 0 4px var(--bg); transition: transform .15s; }
+nav#nav .fab-in svg { width: 1.6rem; height: 1.6rem; stroke-width: 2.6; }
+nav#nav button.fab:active .fab-in { transform: scale(.94); }
+nav#nav button.fab.on { color: var(--accent); }
+
+/* ホーム：入力のショートカット */
+.quick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin: 0.15rem 0 var(--gap); }
+.qbtn { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; border: 1px solid var(--line); background: var(--panel); border-radius: 0.95rem; padding: 0.65rem 0.3rem 0.55rem; box-shadow: var(--shadow); min-width: 0; }
+.qbtn:active { transform: scale(.97); background: var(--panel2); }
+.qbtn .qi { width: 2.2rem; height: 2.2rem; flex-shrink: 0; border-radius: 0.65rem; display: grid; place-items: center; background: var(--accent-weak); color: var(--accent); font-weight: 900; font-size: 1.05rem; }
+.qbtn .ql { font-weight: 700; font-size: 0.8rem; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qbtn.q-expense .qi { background: var(--accent); color: var(--on-accent); }
+
+/* 予算の残り */
+.sub-line { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.75rem; color: var(--muted); margin-top: 0.35rem; }
+.big.neg { color: var(--neg); }
+.lbl.neg { color: var(--neg); font-weight: 700; }
+.budget-line { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; justify-content: flex-end; font-size: 0.78rem; color: var(--muted); margin: -0.1rem 0.2rem 0.5rem; font-variant-numeric: tabular-nums; }
+.budget-line .neg { color: var(--neg); font-weight: 700; }
+
+/* 5つに分かれる切り替え（予定） */
+.seg.seg-5 button { font-size: 0.8rem; padding-left: 0.2rem; padding-right: 0.2rem; }
+
+/* 立替の精算 */
+.tk-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0; border-bottom: 1px solid var(--line); font-size: 0.9rem; }
+.tk-row:last-child { border-bottom: 0; }
+.tk-row small { color: var(--muted); }
+.tk-row .amt { margin-left: auto; }
+.grow { flex: 1; min-width: 0; }
+button[disabled] { opacity: .45; pointer-events: none; }
+
+@media (min-width: 1000px) {
+  nav#nav .fab-in { margin-top: 0; width: 2.8rem; height: 2.8rem; box-shadow: none; }
+  .quick { grid-template-columns: repeat(6, 1fr); column-span: all; }
+  main[data-view="home"] .quick { column-span: all; }
+  main[data-view="analysis"] { max-width: 52rem; }
+}
+
+.row.wrap .t1 { white-space: normal; font-weight: 600; font-size: 0.9rem; line-height: 1.45; }
+.row.wrap { align-items: flex-start; }
