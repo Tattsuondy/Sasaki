@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v3-2026-11-26a';
-  const VERSION_LABEL = 'V.611251611';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v3-2026-11-26b';
+  const VERSION_LABEL = 'V.611251645';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -1021,7 +1021,7 @@
           group = h('section', { class: 'card day' }, h('div', { class: 'day-head' }, h('span', null, mdw(t.date)), dayTotal ? h('span', { class: 'amt' }, yen(-dayTotal)) : null));
           box.appendChild(group);
         }
-        group.appendChild(t.rcpt ? receiptRow(t.rcpt, list.filter((x) => x.rcpt === t.rcpt)) : txRow(t));
+        group.appendChild(t.rcpt ? receiptRow(t.rcpt, list.filter((x) => x.rcpt === t.rcpt)) : txRow(t, { who: true }));
       });
     };
     refreshList();
@@ -1174,17 +1174,35 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
+  /**
+   * 入力者（夫・妻）の切り替え。押すたびに入れかわる。レシートは、そのレシートの記録をまとめて切り替える
+   * list … 切り替える記録（レシートなら同じレシートIDの記録すべて）
+   */
+  function whoToggle(list) {
+    const u = list[0].user || '';
+    const mixed = list.some((t) => (t.user || '') !== u);
+    return h('button', { type: 'button', class: 'who', 'aria-label': '入力者：' + (mixed ? '混在' : u || '未設定') + '（押すと切り替え）', onclick: (ev) => {
+      ev.stopPropagation();
+      const next = mixed ? (S.user || '夫') : u === '夫' ? '妻' : '夫';
+      const before = list.map(stripMeta);
+      try { before.forEach((t) => put('tx', Object.assign({}, t, { user: next }))); }
+      catch (e) { toast(e.message, { error: true }); return; }
+      toast('入力者を「' + next + '」にしました' + (before.length > 1 ? '（' + before.length + '件）' : ''), { undo: () => before.forEach((t) => put('tx', t)) });
+    } }, E.WHO.map((w) => h('span', { class: !mixed && u === w ? 'on' : '' }, w)));
+  }
+  const rcptTx = (rcpt) => (data().tx || []).filter((t) => t.rcpt === rcpt);
+
   /** レシート1枚（1回の入力）を1行で。押すと分類ごとの記録と品目の内訳 */
   function receiptRow(rcpt, parts) {
-    if (parts.length === 1 && !(itemsByTx()[parts[0].id] || []).length) return txRow(parts[0]);
+    if (parts.length === 1 && !(itemsByTx()[parts[0].id] || []).length) return txRow(parts[0], { who: true });
     const t0 = parts[0];
     const total = parts.reduce((a, t) => a + t.amount, 0);
     const nIt = (data().items || []).filter((it) => it.rcpt === rcpt).length;
     const names = parts.slice().sort((a, b) => b.amount - a.amount).map((t) => { const c = catOf(t.category); return c ? c.name : '分類なし'; });
     const pend = parts.some((t) => t._pending), open = parts.some((t) => t.settle === '未精算');
-    return row({ icon: '🧾', t1: t0.memo || 'レシート', t2: [names.join('・'), walletName(t0.from), t0.user, nIt ? nIt + '品目' : ''].filter(Boolean).join('・'),
+    return row({ icon: '🧾', t1: t0.memo || 'レシート', t2: [names.join('・'), walletName(t0.from), nIt ? nIt + '品目' : ''].filter(Boolean).join('・'),
       tag: pend ? '未送信' : open ? '未精算' : null, tagCls: pend ? 'wait' : open ? 'mid' : '',
-      right: amountEl(-total), onclick: () => push('receiptView', { rcpt: rcpt }) });
+      right: amountEl(-total), after: whoToggle(rcptTx(rcpt)), onclick: () => push('receiptView', { rcpt: rcpt }) });
   }
   function receiptViewPage(main, p) {
     const m = model();
@@ -1195,7 +1213,7 @@
     const t0 = parts[0], total = parts.reduce((a, t) => a + t.amount, 0);
     main.appendChild(card(null,
       h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, mdw(t0.date) + '・' + (t0.memo || 'レシート')), h('div', { class: 'big' }, yen(total))),
-        h('div', { class: 'r' }, h('div', { class: 'lbl' }, '支払い'), h('div', { class: 'v' }, walletName(t0.from)), h('div', { class: 'lbl' }, t0.user || ''))),
+        h('div', { class: 'r' }, h('div', { class: 'lbl' }, '支払い'), h('div', { class: 'v' }, walletName(t0.from)), h('div', { class: 'who-wrap' }, h('span', { class: 'lbl' }, '入力者 '), whoToggle(parts)))),
       h('p', { class: 'note' }, parts.length > 1 ? '分類ごとに ' + parts.length + '件の記録に分けて登録しています。' : '1件の記録で登録しています（集計では、品目の分類で分けて数えます）。')));
     main.appendChild(card('分類ごとの記録（押すと直せます）', parts.map((t) => txRow(t))));
     if (items.length) {
@@ -1215,19 +1233,21 @@
       h('button', { type: 'button', class: 'danger', onclick: async () => {
         if (!(await confirmDel('このレシートの記録 ' + parts.length + '件と品目 ' + items.length + '件を削除します。'))) return;
         const oldT = parts.map(stripMeta), oldI = items.map(stripMeta);
+        const learned = learnItems(oldI);   // 振り分けた内容は、読み取りルールに残す
         oldT.forEach((t) => del('tx', t.id)); oldI.forEach((it) => del('items', it.id));
-        toast('レシートを削除しました', { undo: () => { oldT.forEach((t) => put('tx', t)); oldI.forEach((it) => put('items', it)); toast('元に戻しました'); } });
+        toast('レシートを削除しました' + (learned ? '（品目の分類 ' + learned + '件は覚えています）' : ''), { undo: () => { oldT.forEach((t) => put('tx', t)); oldI.forEach((it) => put('items', it)); toast('元に戻しました'); } });
         back();
       } }, 'レシートごと削除')));
   }
 
-  function txRow(t) {
+  function txRow(t, opt) {
+    opt = opt || {};
     const c = catOf(t.category);
     const sign = t.type === '収入' ? 1 : t.type === '支出' ? -1 : 0;
     const where = t.type === '振替' ? walletName(t.from) + ' → ' + walletName(t.to) : t.type === '収入' ? walletName(t.to) : t.type === '残高合わせ' ? walletName(t.to) : walletName(t.from);
     const title = t.type === '振替' ? (t.memo || '振替') : t.type === '残高合わせ' ? '残高合わせ' : (t.memo || (c ? c.name : '分類なし'));
     const nIt = (itemsByTx()[t.id] || []).length;
-    const t2 = [t.type === '支出' || t.type === '収入' ? (c ? c.name : '分類なし') : t.type, where, t.user, nIt ? '🧾' + nIt + '品目' : ''].filter(Boolean).join('・');
+    const t2 = [t.type === '支出' || t.type === '収入' ? (c ? c.name : '分類なし') : t.type, where, opt.who ? '' : t.user, nIt ? '🧾' + nIt + '品目' : ''].filter(Boolean).join('・');
     return row({ icon: t.type === '振替' ? '⇄' : t.type === '残高合わせ' ? '⚖️' : (c ? c.icon : '・'), t1: title, t2: t2,
       tag: t._pending ? '未送信' : t.settle === '未精算' ? '未精算' : t.settle === '精算済' ? '精算済' : t.ref ? '予定' : null,
       tagCls: t._pending ? 'wait' : t.settle === '未精算' ? 'mid' : '',
@@ -1235,6 +1255,7 @@
         const a = amountEl(t.type === '残高合わせ' ? t.amount : t.type === '振替' ? t.amount : sign * t.amount, sign > 0 ? 'pos' : t.type === '振替' ? 'mute' : '', { plus: sign > 0 || t.type === '残高合わせ' });
         return t.cur === 'USD' && t.famt ? h('span', { class: 'col' }, a, h('span', { class: 'after' }, E.usd(t.famt) + '・' + Number(t.fx).toLocaleString('ja-JP', { maximumFractionDigits: 2 }) + '円')) : a;
       })(),
+      after: opt.who ? whoToggle(t.rcpt ? rcptTx(t.rcpt) : [t]) : null,
       onclick: () => push('edit', { table: 'tx', id: t.id }) });
   }
 
@@ -1716,6 +1737,7 @@
           if (!(await confirmDel('「' + (cur.name || cur.item || cur.memo || md(cur.date) || '') + '」を削除します。'))) return;
           const old = stripMeta(cur);
           const oldItems = p.table === 'tx' ? (data().items || []).filter((it) => it.tx === p.id).map(stripMeta) : [];
+          if (oldItems.length) learnItems(oldItems);   // 振り分けた内容は、読み取りルールに残す
           del(p.table, p.id); oldItems.forEach((it) => del('items', it.id));
           R.guard = null; toast('削除しました' + (oldItems.length ? '（品目 ' + oldItems.length + '件も）' : ''), { undo: () => { put(p.table, old); oldItems.forEach((it) => put('items', it)); toast('元に戻しました'); } }); back();
         } }, '削除') : null,
@@ -1981,6 +2003,33 @@
     finally { S.mode = ''; setStatus(); }
   }
 
+  /**
+   * 品目の分類を「読み取りルール」に覚える。いまの自動の分け方と違う品目だけ（手で直した分）。
+   * ルールは記録とは別の表なので、あとで記録やレシートを消しても、振り分けた内容は残る。
+   * 同じ言葉のルールがあれば、分類を新しいほうに直す（古いルールが勝ってしまわないように）
+   */
+  function learnItems(items, defaults) {
+    const m = model();
+    const cats = m.categories.filter((c) => c.kind === '支出');
+    const byName = (n) => (cats.find((c) => c.name === n) || {}).id || '';
+    const def = defaults || { food: prefs.rcFood || byName('食費') || (cats[0] || {}).id || '', other: prefs.rcOther || byName('日用品') || byName('食費') || '' };
+    const list = (items || []).filter((it) => it.category && String(it.name || '').trim());
+    if (!list.length) return 0;
+    const hasReduced = list.some((it) => it.reduced);
+    let n = 0;
+    list.forEach((it) => {
+      const auto = E.classifyReceipt({ items: [{ name: it.name, price: it.price, reduced: !!it.reduced }], hasReduced: hasReduced }, data().rules || [], def, byName).items[0];
+      if (auto.category === it.category) return;   // 自動でも同じ分類になる
+      const key = E.normText(it.name).replace(/\d+(ml|mL|ML|g|kg|L|l|個|本|缶|入|枚|R|m)?/g, '').replace(/[\s()（）\[\]×x*]/g, '').slice(0, 15);
+      if (key.length < 2) return;
+      const same = (data().rules || []).find((r) => r.keyword === key);
+      if (same) { if (same.category !== it.category || same.active === false) put('rules', Object.assign({}, stripMeta(same), { category: it.category, active: true })); }
+      else put('rules', { id: rid('r'), keyword: key, category: it.category, order: 5, active: true });
+      n++;
+    });
+    return n;
+  }
+
   /* ================= 交通費（乗換案内で運賃を調べて入れる） ================= */
   // 運賃を自動で返す無料のAPIがないため、乗換案内を駅名入りで開き、見た運賃を入れる。区間ごとに覚えて次からは選ぶだけ。
   // 定期区間：定期の駅から外に出る駅（乗り換える駅）を出発駅にして調べれば、定期区間を引いた運賃になる
@@ -2183,12 +2232,7 @@
         const one = oneLine ? txOfCat[parts[0].category] : '';
         S2.items.filter((it) => String(it.name || '').trim()).forEach((it) => put('items', { id: rid('it'), rcpt: rcpt, tx: one || txOfCat[it.category] || '',
           date: S2.date || m.today, store: memo, name: String(it.name).trim().slice(0, 100), price: Math.round(Number(it.price) || 0), category: it.category || '', reduced: !!it.reduced }));
-        if (S2.learn && !oneLine) {
-          S2.items.filter((it) => it.category !== it.auto && it.name.trim()).forEach((it) => {
-            const key = E.normText(it.name).replace(/\d+(ml|mL|ML|g|kg|L|l|個|本|缶|入|枚|R|m)?/g, '').replace(/[\s()（）\[\]×x*]/g, '').slice(0, 15);
-            if (key.length >= 2) put('rules', { id: rid('r'), keyword: key, category: it.category, order: 5, active: true });
-          });
-        }
+        if (S2.learn) learnItems(S2.items, p.defaults);   // 分けても、まとめても、変えた分類を覚える
         prefs.lastFrom = S2.from; savePrefs();
         R.guard = null;
         toast((oneLine ? '1件で登録しました（' : parts.length + '件に分けて登録しました（') + memo + '・品目 ' + S2.items.filter((it) => String(it.name || '').trim()).length + '件の内訳つき）');
