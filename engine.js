@@ -629,6 +629,12 @@ var Engine = (function () {
       nextReduced = false;
       const l = dept ? raw.slice(dept[0].length) : raw;
       const m = PRICE.exec(l);
+      // 数字・¥・個などだけの行は、品名ではなく数量の行（「¥282個 ¥56」のように空白が消えて読まれても）
+      if (m && !l.slice(0, m.index).replace(/[¥@\d,.\s個コｺ点本袋枚組xX×*()（）円単価]/g, '')) {
+        const v = Number(m[1].replace(/[\s¥,]/g, ''));
+        if (pending && v > 0) { push(pending.name, v, pending.reduced || reduced); pending = null; nameRun = 0; }
+        return;
+      }
       if (m) {
         let name = l.slice(0, m.index).trim();
         let price = Number(m[1].replace(/[\s¥,]/g, ''));
