@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v3-2026-11-27a';
-  const VERSION_LABEL = 'V.611271020';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v3-2026-11-28a';
+  const VERSION_LABEL = 'V.611280820';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -592,7 +592,7 @@
     const right = e.amount === null ? '' : h('span', { class: 'col' }, amountEl(e.planKind === '振替' ? e.amount : e.sign * e.amount, e.planKind === '振替' ? 'mute' : e.sign > 0 ? 'pos' : e.kind === 'debit' && !e.confirmed ? 'est' : '', { plus: e.planKind !== '振替', maskable: true }),
       e.after !== undefined ? h('span', { class: 'after' + (e.after < 0 ? ' neg' : '') }, '残 ' + yen(e.after, { maskable: true })) : null);
     return row({ icon: icon, t1: (e.kind === 'deadline' ? '' : md(e.date) + ' ') + e.title, t2: t2, right: right, cls: e.overdue ? 'overdue' : '',
-      onclick: e.kind === 'plan' ? () => recordPlan(e) : e.kind === 'debit' ? () => push('card', { id: e.card }) : e.kind === 'deadline' ? () => push('edit', { table: 'deadlines', id: e.id }) : null });
+      onclick: e.kind === 'plan' ? () => recordPlan(e) : e.kind === 'debit' ? () => push('bill', { card: e.card, ym: e.ym }) : e.kind === 'deadline' ? () => push('edit', { table: 'deadlines', id: e.id }) : null });
   }
 
   /* ================= 入力 ================= */
@@ -1335,9 +1335,28 @@
     }
   }
 
+  /**
+   * カード払いの予定（固定費・年間）は、1件ずつ記録せず、カードの請求でまとめて消し込む。
+   * どの請求（何日の引き落とし）に入るかを返す。カード払いでなければ null
+   */
+  function cardBillOf(m, p, date) {
+    const w = m.w[p.wallet];
+    if (!w || !E.isCard(w) || p.kind === '収入' || p.kind === '振替') return null;
+    const cyc = E.cycleOf(w, date);
+    return { card: w, ym: cyc.debitYm, debitDate: cyc.debitDate };
+  }
+  const openBill = (cb) => push('bill', { card: cb.card.id, ym: cb.ym });
+
   function occFromPlan(m, p, ym) { return E.occurrences(m, ym).find((o) => o.plan.id === p.id) || null; }
   function occRow(o, m) {
     const p = o.plan, w = o.wallet;
+    const cb = !o.done ? cardBillOf(m, p, o.date) : null;
+    if (cb) {
+      return row({ icon: '💳', t1: p.name, tag: p.inBudget === false && p.kind === '固定費' ? '生活費の外' : null,
+        t2: (o.monthOnly ? '日にち未定' : md(o.date)) + '・' + md(cb.debitDate) + ' ' + cb.card.name + 'でまとめて消し込み', cls: 't2wrap',
+        right: h('span', { class: 'col' }, amountEl(o.planned, 'est'), h('button', { type: 'button', class: 'sbtn', onclick: (ev) => { ev.stopPropagation(); openBill(cb); } }, '消し込み')),
+        onclick: () => openBill(cb) });
+    }
     return row({ icon: o.done ? '✅' : p.kind === '収入' ? '💰' : '⬜️', t1: p.name, tag: p.inBudget === false && p.kind === '固定費' ? '生活費の外' : null,
       t2: [o.monthOnly ? '日にち未定' : md(o.date), (w ? w.name : '口座未設定') + (p.kind === '振替' ? ' → ' + (o.to ? o.to.name : '未設定') : ''), o.done ? (p.kind === '収入' ? '入金済み' : p.kind === '振替' ? '移動済み' : '支払い済み') : ''].filter(Boolean).join('・'),
       right: h('span', { class: 'col' }, amountEl(o.done ? o.actual : o.planned, o.done ? '' : 'est'),
@@ -1353,6 +1372,8 @@
     const o = E.occurrences(m, ev.ym).find((x) => x.plan.id === p.id);
     if (!o) return;
     if (o.done) return push('edit', { table: 'tx', id: o.done.id });
+    const cb = cardBillOf(m, p, o.date);
+    if (cb) { toast(p.name + 'は' + cb.card.name + '払いです。' + md(cb.debitDate) + 'の請求でまとめて消し込みます'); return openBill(cb); }
     const isTr = p.kind === '振替';
     const amount = h('input', { type: 'text', inputmode: 'numeric', value: String(o.planned || ''), class: 'big-input' });
     const date = h('input', { type: 'date', value: o.date <= m.today ? o.date : m.today });
@@ -1374,6 +1395,8 @@
   }
   function quickRecord(o) {
     const m = model(), p = o.plan;
+    const cb = cardBillOf(m, p, o.date);
+    if (cb) return openBill(cb);
     if (!o.wallet || !o.planned || (p.kind === '振替' && !o.to)) { recordPlan({ plan: p.id, ym: o.ym }); return; }
     const tx = planTx(p, o, { date: o.date <= m.today ? o.date : m.today, amount: o.planned, from: p.wallet, to: p.kind === '振替' ? p.to : p.wallet });
     put('tx', tx);

@@ -1204,6 +1204,14 @@ var Engine = (function () {
         add('中', 'dup', '「' + label(t) + '」が2回登録されているかもしれません（' + String(prev.created).slice(11, 16) + ' と ' + String(t.created).slice(11, 16) + '）。', 'tx', t.id);
       seen[k] = t;
     });
+    // カード払いの予定を、口座から直接払った記録にしている（カードの引き落としと二重になる）
+    const P = {}; (data.plans || []).forEach((p) => { P[p.id] = p; });
+    (data.tx || []).forEach((t) => {
+      const mm = /^p:(.+):(\d{4}-\d{2})$/.exec(t.ref || ''); if (!mm || !P[mm[1]]) return;
+      const pw = W[P[mm[1]].wallet], tw = W[t.from];
+      if (pw && pw.kind === 'カード' && tw && tw.kind !== 'カード' && t.type === '支出')
+        add('高', 'card_plan_direct', '「' + label(t) + '」は' + pw.name + '払いの予定ですが、' + tw.name + 'から払った記録になっています。カードの引き落としと二重に引かれている可能性があります。', 'tx', t.id);
+    });
     (data.plans || []).forEach((p) => {
       if (p.active === false) return;
       if (p.wallet && !W[p.wallet]) add('高', 'missing_wallet', '予定「' + p.name + '」の口座・カードが見つかりません。', 'plans', p.id);
@@ -1286,7 +1294,7 @@ var Engine = (function () {
       if (!acc || !acc.openingAt || b.debitDate <= acc.openingAt.slice(0, 10)) return;
       add('中', 'bill_passed', b.cardName + 'の' + md(b.debitDate) + '分は、記録から計算した ' + yen(b.amount) + ' で引いています。明細と違うときは確定してください。', {}, { card: b.card, appOnly: true });
     });
-    proj.events.filter((e) => e.kind === 'plan' && e.overdue).forEach((e) => {
+    proj.events.filter((e) => e.kind === 'plan' && e.overdue && !e.viaCard).forEach((e) => {   // カード払いの予定は、カードの請求で消し込む
       add('中', 'plan_overdue', e.title + '（' + md(e.origDate) + (e.monthOnly ? 'の月' : '') + '）がまだ記録されていません。' + (e.planKind === '収入' ? '入金されたら' : '払ったら') + '「記録する」を押してください。', {}, { ref: e.ref, appOnly: true });
     });
     m.deadlines.forEach((d) => {

@@ -427,3 +427,4 @@ button[disabled] { opacity: .45; pointer-events: none; }
 .tk-row .mini-amt { flex: 0 0 6.5rem; width: 6.5rem !important; min-width: 0; }
 .tk-row .grow { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .tk-row .grow small { display: block; }
+.row.t2wrap .t2 { white-space: normal; overflow: visible; }
