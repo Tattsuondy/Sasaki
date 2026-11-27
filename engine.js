@@ -832,6 +832,42 @@ var Engine = (function () {
     return out;
   }
 
+  /**
+   * カードの請求1回分の中身（消し込み用）
+   * - txs … この請求に入る、記録済みの利用
+   * - plans … この請求に入るはずの予定（固定費など）で、まだ記録していないもの
+   * - bill … 請求（確定額・状態）。記録も確定もない請求でも枠を返す
+   */
+  function billDetail(m, cardId, debitYm) {
+    const card = m.w[cardId];
+    if (!isCard(card)) return null;
+    const all = bills(m, { withOpen: true });
+    const key = card.id + '|' + debitYm;
+    const cyc = { debitYm: debitYm, debitDate: dateIn(debitYm, Number(card.debitDay) || 27), closeDate: '' };
+    const off = Number(card.debitOffset) || 1;
+    const closeYm = addMonths(debitYm, -off);
+    cyc.closeDate = dateIn(closeYm, closeDayOf(card, closeYm));
+    const b = all[key] || { key: key, card: card.id, cardName: card.name, ym: debitYm, debitDate: cyc.debitDate, closeDate: cyc.closeDate, payFrom: card.payFrom,
+      used: 0, count: 0, planned: 0, override: null, status: '自動', memo: '', confirmed: false, amount: 0 };
+    const row = m.billRows[key] || null;
+    const txs = m.tx.filter((t) => (t.from === card.id && (t.type === '支出' || t.type === '振替')) || (t.to === card.id && t.type === '収入'))
+      .filter((t) => cycleOf(card, t.date).debitYm === debitYm).sort((a, c) => a.date.localeCompare(c.date));
+    const plans = [];
+    for (let i = -4; i <= 0; i++) {
+      const ym = addMonths(debitYm, i);
+      occurrences(m, ym).forEach((o) => {
+        if (o.done || !o.wallet || o.wallet.id !== card.id || o.plan.kind === '収入' || o.plan.kind === '振替') return;
+        if (cycleOf(card, o.date).debitYm !== debitYm) return;
+        plans.push(o);
+      });
+    }
+    const used = txs.reduce((a, t) => a + (t.to === card.id && t.type === '収入' ? -t.amount : t.amount), 0);
+    const plannedSum = plans.reduce((a, o) => a + (o.planned || 0), 0);
+    return { card: card, key: key, ym: debitYm, debitDate: b.debitDate || cyc.debitDate, closeDate: b.closeDate || cyc.closeDate, payFrom: card.payFrom,
+      row: row, confirmed: !!(row && row.amount !== ''), override: row && row.amount !== '' ? Number(row.amount) : null, status: (row && row.status) || '自動',
+      txs: txs, used: used, plans: plans, plannedSum: plannedSum };
+  }
+
   /** カードごとの「次に引き落とされる請求」と「いま使っている分」 */
   function cardStatus(m) {
     const all = bills(m);
@@ -1290,7 +1326,7 @@ var Engine = (function () {
   return {
     SCHEMA: SCHEMA, TABLES: TABLES, WHO: WHO, clean: clean,
     pad: pad, toDateStr: toDateStr, addDays: addDays, diffDays: diffDays, ymOf: ymOf, addMonths: addMonths, dateIn: dateIn, dimOf: dimOf, weekday: weekday,
-    isAccount: isAccount, isCard: isCard, build: build, cycleOf: cycleOf, bills: bills, cardStatus: cardStatus, balances: balances,
+    isAccount: isAccount, isCard: isCard, build: build, cycleOf: cycleOf, bills: bills, cardStatus: cardStatus, billDetail: billDetail, balances: balances,
     planOccurs: planOccurs, planRef: planRef, occurrences: occurrences, nextOccurrence: nextOccurrence, projection: projection,
     month: month, summary: summary, budgetLeft: budgetLeft, refsTo: refsTo, dataCheck: dataCheck, tatekaeOpen: tatekaeOpen, annual: annual, bonusView: bonusView, alerts: alerts,
     yen: yen, md: md, afterText: afterText, normText: normText, parseReceipt: parseReceipt, classifyReceipt: classifyReceipt, checkReceipt: checkReceipt, splitByCategory: splitByCategory,

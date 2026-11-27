@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v3-2026-11-26b';
-  const VERSION_LABEL = 'V.611251645';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v3-2026-11-27a';
+  const VERSION_LABEL = 'V.611271020';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -1466,30 +1466,92 @@
     main.appendChild(card('請求（引き落とし日ごと）', bills.length ? bills.map((b) => row({ icon: b.debitDate > m.today ? '🕒' : b.status === '引き落とし不可' ? '⚠️' : '✓',
       t1: md(b.debitDate) + ' 引き落とし', tag: b.status === '引き落とし不可' ? '引き落とし不可' : b.confirmed ? '確定' : '見込み', tagCls: b.status === '引き落とし不可' ? 'high' : b.confirmed ? '' : 'mid',
       t2: ['記録 ' + yen(b.used) + '（' + b.count + '件）', b.planned ? '予定 ' + yen(b.planned) : '', b.closeDate ? md(b.closeDate) + '締め' : ''].filter(Boolean).join('・'),
-      right: amountEl(b.amount, b.confirmed ? '' : 'est'), onclick: () => confirmBill(c.card, b) })) : empty('請求はまだありません')));
+      right: amountEl(b.amount, b.confirmed ? '' : 'est'), onclick: () => push('bill', { card: c.card.id, ym: b.ym }) })) : empty('請求はまだありません')));
     const cyc = c.cycle;
     const using = m.tx.filter((t) => (t.from === c.card.id || t.to === c.card.id) && E.cycleOf(c.card, t.date).debitYm === cyc.debitYm).reverse();
     main.appendChild(card('いま使っている分（' + md(cyc.closeDate) + '締め・' + md(cyc.debitDate) + '払い）', using.length ? using.map(txRow) : empty('まだありません')));
   }
 
-  function confirmBill(cardW, b) {
+  /* ---------- カードの請求の消し込み（1回分まとめて） ---------- */
+  function billPage(main, p) {
     const m = model();
-    const key = cardW.id + '|' + b.ym;
-    const ex = m.billRows[key];
-    const amount = h('input', { type: 'text', inputmode: 'numeric', class: 'big-input', value: b.confirmed ? String(b.override) : '', placeholder: String(b.used + b.planned) });
-    const status = h('select', null, ['自動', '引き落とし不可'].map((s) => h('option', { value: s, selected: s === b.status ? 'selected' : null }, s === '自動' ? '口座から自動で引き落とし' : '引き落とせなかった（あとで振込などで払う）')));
-    const memo = h('input', { type: 'text', value: ex ? ex.memo : '' });
-    sheet(cardW.name + '・' + md(b.debitDate) + ' の請求', h('div', { class: 'form' },
-      h('p', { class: 'note' }, '記録から計算した額：' + yen(b.used) + (b.planned ? '／予定分 ' + yen(b.planned) : '') + '。カード会社の明細の金額を入れると、こちらを使います（空欄なら計算した額）。'),
-      fieldWrap('確定した請求額（円）', amount), fieldWrap('引き落とし', status), fieldWrap('メモ', memo),
-      h('p', { class: 'note' }, '「引き落とせなかった」にすると口座からは引かず、カードの未払いとして残ります。払ったら「振替」で口座→カードを記録してください。')), {
-      saveLabel: '保存', extra: ex ? [{ label: '確定を消す', danger: true, run: () => { del('bills', ex.id); } }] : [],
-      onSave: () => {
-        const v = amount.value.trim() === '' ? '' : num(amount.value);
-        put('bills', { id: ex ? ex.id : rid('b'), card: cardW.id, ym: b.ym, amount: v, status: status.value, memo: memo.value });
-        toast('請求を保存しました');
-      } });
+    const d = E.billDetail(m, p.card, p.ym);
+    if (!d) { main.appendChild(card(null, empty('見つかりません'))); return; }
+    setTitle(d.card.name + '・' + md(d.debitDate) + 'の請求');
+    if (!p.state) {
+      p.state = { sel: {}, amt: {}, total: d.confirmed ? String(d.override) : '', status: d.status, memo: d.row ? d.row.memo || '' : '', dirty: false };
+      d.plans.forEach((o) => { p.state.sel[o.ref] = !!o.planned; p.state.amt[o.ref] = o.planned ? String(o.planned) : ''; });   // 金額が未定の予定は、最初は外しておく
+    }
+    const F = p.state;
+    const left = E.diffDays(m.today, d.debitDate);
+    const allDone = d.confirmed && !d.plans.length;
+    main.appendChild(card(null,
+      h('div', { class: 'kpi' }, h('div', null, h('div', { class: 'lbl' }, md(d.debitDate) + (left > 0 ? '（あと' + left + '日）' : left === 0 ? '（今日）' : '（済）') + 'に引き落とし'),
+        h('div', { class: 'big' }, d.confirmed ? yen(d.override) : '未確定')),
+        h('div', { class: 'r' }, h('div', { class: 'lbl' }, '引き落とし口座'), h('div', { class: 'v' }, walletName(d.payFrom) || '未設定'),
+          h('span', { class: 'tag ' + (allDone ? 'low' : 'mid') }, allDone ? '消し込み済' : d.confirmed ? '確定（予定の記録が残っています）' : 'まだ消し込んでいません'))),
+      h('p', { class: 'note' }, (d.closeDate ? md(d.closeDate) + '締め' : '') + '。この請求に入る利用と予定を確かめて、カード会社の明細の金額で「消し込み」をします。')));
+
+    // まだ記録していない予定（固定費など）
+    const sumBox = h('div');
+    const selSum = () => d.plans.filter((o) => F.sel[o.ref]).reduce((a, o) => a + (num(F.amt[o.ref] || '0', false, true) || 0), 0);
+    if (d.plans.length) main.appendChild(card('まだ記録していない予定（' + d.plans.length + '件）', d.plans.map((o) => {
+      const amt = h('input', { type: 'text', inputmode: 'numeric', class: 'mini-amt', value: F.amt[o.ref], 'aria-label': o.plan.name + 'の金額', oninput: (e) => { F.amt[o.ref] = e.target.value; F.dirty = true; drawSum(); } });
+      return h('div', { class: 'tk-row' }, h('input', { type: 'checkbox', checked: !!F.sel[o.ref], onchange: (e) => { F.sel[o.ref] = e.target.checked; F.dirty = true; drawSum(); } }),
+        h('span', { class: 'grow' }, o.plan.name, h('small', null, '　' + (o.monthOnly ? (+o.ym.slice(5)) + '月' : md(o.date)))), amt, h('span', null, '円'));
+    }), h('p', { class: 'note' }, 'チェックした予定を、このカードの利用として記録します（金額は明細に合わせて直せます）。')));
+
+    // 記録済みの利用
+    main.appendChild(card('記録済みの利用（' + d.txs.length + '件・' + yen(d.used) + '）', d.txs.length ? d.txs.map((t) => txRow(t)) : empty('この請求に入る記録はありません')));
+
+    // 請求額
+    const totalIn = h('input', { type: 'text', inputmode: 'numeric', class: 'big-input', value: F.total, placeholder: '明細の金額', oninput: (e) => { F.total = e.target.value; F.dirty = true; drawSum(); } });
+    const status = h('select', { onchange: (e) => { F.status = e.target.value; F.dirty = true; } }, ['自動', '引き落とし不可'].map((v) => h('option', { value: v, selected: v === F.status ? 'selected' : null }, v === '自動' ? '口座から引き落とし' : '引き落とせなかった（あとで振込などで払う）')));
+    const memo = h('input', { type: 'text', value: F.memo, oninput: (e) => { F.memo = e.target.value; F.dirty = true; } });
+    const drawSum = () => {
+      clear(sumBox);
+      const calc = d.used + selSum();
+      const t = num(F.total, false, true);
+      sumBox.appendChild(h('div', { class: 'bd' }, h('span', null, '記録済み ' + yen(d.used) + ' ＋ 予定 ' + yen(selSum())), h('strong', null, '＝ ' + yen(calc))));
+      if (t !== null && t !== calc) sumBox.appendChild(h('div', { class: 'check-box warn' }, h('strong', null, '差 ' + yen(t - calc, { plus: true })),
+        h('span', null, '記録していない利用・年会費・手数料などの差です。消し込むと、明細の金額（' + yen(t) + '）を口座から引き落とします。')));
+      else if (t !== null) sumBox.appendChild(h('div', { class: 'check-box ok' }, h('strong', null, '✓ 明細の金額と一致しています')));
+    };
+    drawSum();
+    main.appendChild(card('請求額', sumBox, fieldWrap('カード会社の明細の金額（円）', totalIn), fieldWrap('引き落とし', status), fieldWrap('メモ', memo),
+      h('p', { class: 'note' }, '空欄のまま消し込むと、記録と予定の合計（' + yen(d.used + selSum()) + '）で確定します。')));
+
+    const save = () => {
+      try {
+        const chosen = d.plans.filter((o) => F.sel[o.ref]);
+        const made = chosen.map((o) => {
+          const a = num(F.amt[o.ref] || '', false, true);
+          if (!(a > 0)) throw new Error('「' + o.plan.name + '」の金額を入れるか、チェックを外してください。');
+          return planTx(o.plan, o, { date: o.date, amount: a, from: d.card.id, to: d.card.id });
+        });
+        const t = num(F.total, false, true);
+        const total = t === null ? d.used + made.reduce((x, y) => x + y.amount, 0) : t;
+        const oldRow = d.row ? stripMeta(d.row) : null;
+        made.forEach((x) => put('tx', x));
+        put('bills', { id: d.row ? d.row.id : rid('b'), card: d.card.id, ym: d.ym, amount: total, status: F.status, memo: F.memo });
+        R.guard = null;
+        toast(d.card.name + '・' + md(d.debitDate) + 'の請求を ' + yen(total) + ' で消し込みました' + (made.length ? '（予定 ' + made.length + '件を記録）' : ''),
+          { undo: () => { made.forEach((x) => del('tx', x.id)); if (oldRow) put('bills', oldRow); else { const r = (data().bills || []).find((b) => b.card === d.card.id && b.ym === d.ym); if (r) del('bills', r.id); } toast('元に戻しました'); } });
+        back();
+        return true;
+      } catch (e) { toast(e.message, { error: true }); return false; }
+    };
+    R.guard = { form: true, dirty: () => F.dirty, save: save, title: '消し込みをまだ保存していません', saveLabel: '消し込む' };
+    main.appendChild(h('div', { class: 'form-acts pad' },
+      h('button', { type: 'button', onclick: back }, 'やめる'),
+      d.row ? h('button', { type: 'button', class: 'danger', onclick: async () => {
+        if (!(await ask('確定を外しますか？', '明細の金額を消して、記録と予定から計算した見込みに戻します。記録した予定は消えません。', [{ v: true, label: '外す', danger: true }, { v: false, label: 'やめる' }]))) return;
+        const old = stripMeta(d.row); del('bills', d.row.id); R.guard = null; toast('確定を外しました', { undo: () => put('bills', old) }); back();
+      } }, '確定を外す') : null,
+      h('button', { type: 'button', class: 'primary', onclick: save }, d.plans.length ? '消し込む（予定も記録）' : '消し込む')));
   }
+
+
 
   /* ================= 管理 ================= */
   function managePage(main) {
@@ -1842,11 +1904,13 @@
     const m = model();
     setTitle('カードの請求');
     const proj = E.projection(m, 100);
-    const all = Object.keys(proj.bills).map((k) => proj.bills[k]).filter((b) => b.debitDate > m.today || b.status === '引き落とし不可').sort((a, b) => a.debitDate.localeCompare(b.debitDate));
-    main.appendChild(h('p', { class: 'note pad' }, 'これから引き落とされる請求です。カード会社の明細で金額が決まったら、押して「確定した請求額」を入れてください。'));
+    // これからの請求と、引き落とし日が今日・最近（45日以内）で、まだ確定していない請求
+    const all = Object.keys(proj.bills).map((k) => proj.bills[k]).filter((b) => b.debitDate >= m.today || b.status === '引き落とし不可' || (!b.confirmed && E.diffDays(b.debitDate, m.today) <= 45))
+      .sort((a, b) => a.debitDate.localeCompare(b.debitDate));
+    main.appendChild(h('p', { class: 'note pad' }, 'カード会社の明細で金額が決まったら、押して「消し込み」をします。その請求に入る固定費などの予定を、まとめて記録できます。'));
     main.appendChild(card(null, all.length ? all.map((b) => row({ icon: '💳', t1: b.cardName + '・' + md(b.debitDate), tag: b.status === '引き落とし不可' ? '引き落とし不可' : b.confirmed ? '確定' : '見込み', tagCls: b.status === '引き落とし不可' ? 'high' : b.confirmed ? '' : 'mid',
       t2: '記録 ' + yen(b.used) + (b.planned ? '・予定 ' + yen(b.planned) : '') + '・' + (walletName(b.payFrom) || '引き落とし口座未設定'), right: amountEl(b.amount, b.confirmed ? '' : 'est'),
-      onclick: () => confirmBill(m.w[b.card], b) })) : empty('これからの請求はありません')));
+      onclick: () => push('bill', { card: b.card, ym: b.ym }) })) : empty('これからの請求はありません')));
   }
 
   /* ---------- 表示の設定 ---------- */
@@ -2302,7 +2366,7 @@
     main.appendChild(h('button', { type: 'button', class: 'link center', onclick: () => push('edit', { table: 'todos', id: null }) }, '＋ 期限やメモをつけて追加'));
   }
 
-  const PAGES = { cards: cardsPage, check: checkPage, receiptView: receiptViewPage, fare: farePage, receipt: receiptPage, todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
+  const PAGES = { bill: billPage, cards: cardsPage, check: checkPage, receiptView: receiptViewPage, fare: farePage, receipt: receiptPage, todos: todosPage, account: accountPage, card: cardPage, table: tablePage, edit: editPage, opening: openingPage, bills: billsPage, display: displayPage, sync: syncPage, device: devicePage };
 
   /* ================= 登録画面 ================= */
   function showSetup(msg) {

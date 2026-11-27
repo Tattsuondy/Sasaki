@@ -420,3 +420,10 @@ button[disabled] { opacity: .45; pointer-events: none; }
 .who span.on { background: var(--accent); color: var(--on-accent); }
 .who:active { transform: scale(.95); }
 .who-wrap { display: flex; align-items: center; justify-content: flex-end; gap: 0.2rem; margin-top: 0.2rem; }
+
+/* 請求の消し込み */
+.mini-amt { width: 6.5rem; text-align: right; font-family: var(--num); font-weight: 700; padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+.tk-row > input[type=checkbox] { flex: 0 0 auto; width: 1.2rem; height: 1.2rem; }
+.tk-row .mini-amt { flex: 0 0 6.5rem; width: 6.5rem !important; min-width: 0; }
+.tk-row .grow { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.tk-row .grow small { display: block; }
