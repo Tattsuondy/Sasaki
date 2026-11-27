@@ -428,3 +428,16 @@ button[disabled] { opacity: .45; pointer-events: none; }
 .tk-row .grow { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .tk-row .grow small { display: block; }
 .row.t2wrap .t2 { white-space: normal; overflow: visible; }
+
+/* チャージして払う */
+.charge-box { border: 1px dashed var(--line); border-radius: 0.9rem; padding: 0.55rem 0.7rem; margin: 0.2rem 0 0.6rem; background: var(--panel); }
+.charge-box.on { border-style: solid; border-color: var(--accent); background: var(--accent-weak); }
+.charge-row { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.45rem; flex-wrap: wrap; }
+.charge-row select { flex: 1; min-width: 8rem; }
+.charge-row .chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+.charge-row .chip { padding: 0.25rem 0.55rem; font-size: 0.78rem; }
+.charge-calc { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.2rem 0.6rem; font-size: 0.8rem; color: var(--muted); margin-top: 0.45rem; font-variant-numeric: tabular-nums; }
+.charge-calc strong { color: var(--fg); }
+.charge-calc.neg strong { color: var(--neg); }
+.charge-row .mini-amt { flex: 0 0 7rem; width: 7rem !important; }
+.charge-row select { width: auto; }

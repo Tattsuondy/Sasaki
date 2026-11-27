@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v3-2026-11-28a';
-  const VERSION_LABEL = 'V.611280820';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v3-2026-11-28b';
+  const VERSION_LABEL = 'V.611280830';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -48,7 +48,7 @@
   ];
   // 入力のショートカット（ホームのいちばん上）
   const QUICK = [
-    ['expense', '💸', '支出'], ['receipt', '📷', 'レシート'], ['fare', '🚃', '交通費'], ['income', '💰', '収入'], ['transfer', '⇄', '振替'], ['usd', '$', 'ドル']
+    ['expense', '💸', '支出'], ['receipt', '📷', 'レシート'], ['fare', '🚃', '交通費'], ['income', '💰', '収入'], ['transfer', '⇄', '振替'], ['usd', '$', 'ドル'], ['charge', '⚡', 'チャージ払い']
   ];
   const UI_DEF = { scale: 100, theme: 'auto', accent: 'green', density: 'normal', yen: 'suffix', keypad: 'calc', start: 'home', afterSave: 'stay',
     home: HOME_SECTIONS.map((s) => s[0]), quick: QUICK.map((q) => q[0]), days: 62, mask: false, motion: true, listOrder: 'new' };
@@ -577,6 +577,16 @@
   function quickGo(k, file) {
     if (k === 'receipt') { st.type = '支出'; file.click(); return; }
     if (k === 'fare') { push('fare', {}); return; }
+    if (k === 'charge') {
+      // 前にチャージ払いした電子マネー（なければ最初の電子マネー）で、チャージして払うを入れておく
+      const m = model(), me = S.user || (cfg && cfg.n) || '';
+      const em = m.wallets.filter((w) => w.kind === '電子マネー');
+      const used = Object.keys(prefs.charge).filter((x) => x.split('|')[1] === me && prefs.charge[x].on).map((x) => x.split('|')[0]);
+      const w = em.find((x) => used.indexOf(x.id) >= 0) || em[0];
+      if (!w) { toast('電子マネーが登録されていません（管理 > 口座・カード）', { error: true }); return; }
+      st.type = '支出'; st.cur = 'JPY'; st.amount = ''; st.from = w.id; st.charge = true; st.chargeEdited = false; st.chargeFrom = ''; st._chargeFor = w.id;
+      go('input'); return;
+    }
     st.type = k === 'income' ? '収入' : k === 'transfer' ? '振替' : '支出';
     st.cur = k === 'usd' ? 'USD' : 'JPY';
     st.amount = ''; st.usd = ''; st.from = ''; st.to = '';
@@ -596,7 +606,8 @@
   }
 
   /* ================= 入力 ================= */
-  const st = { type: '支出', amount: '', cat: { '支出': '', '収入': '' }, from: '', to: '', date: '', memo: '', settle: false, cur: 'JPY', usd: '', fxManual: '', fxEdit: false };
+  const st = { type: '支出', amount: '', cat: { '支出': '', '収入': '' }, from: '', to: '', date: '', memo: '', settle: false, cur: 'JPY', usd: '', fxManual: '', fxEdit: false,
+    charge: false, chargeAmt: '', chargeEdited: false, chargeFrom: '' };
 
   // ドルのレート（GASが GOOGLEFINANCE で調べる。10分間は同じ値を使う。取れないときは前回の値か手入力）
   const FX = { usd: store.get('kakeibo.fx', null), busy: false, err: '' };
@@ -617,7 +628,8 @@
   const usdText = (s2) => { const p2 = String(s2 || '').split('.'); return (p2[0] ? Number(p2[0]).toLocaleString('en-US') : '0') + (p2.length > 1 ? '.' + p2[1] : ''); };
   const mdhm = (s2) => s2 ? (+s2.slice(5, 7)) + '/' + (+s2.slice(8, 10)) + ' ' + s2.slice(11, 16) : '';
   // 前の版の設定が残っていても動くように、足りないものは補う
-  const prefs = Object.assign({ walletByCat: {}, lastFrom: '', lastTo: '', lastIncomeTo: '' }, store.get('kakeibo.pref', {}));
+  const prefs = Object.assign({ walletByCat: {}, lastFrom: '', lastTo: '', lastIncomeTo: '', charge: {} }, store.get('kakeibo.pref', {}));
+  if (!prefs.charge || typeof prefs.charge !== 'object') prefs.charge = {};
   if (!prefs.walletByCat || typeof prefs.walletByCat !== 'object') prefs.walletByCat = {};
   const savePrefs = () => store.set('kakeibo.pref', prefs);
 
@@ -707,6 +719,7 @@
         const n = amt.querySelector('.num');
         n.textContent = st.amount ? Number(st.amount).toLocaleString('ja-JP') : '0';
         amt.classList.toggle('zero', !st.amount);
+        if (st._chargeDraw && document.querySelector('.charge-box')) st._chargeDraw();
       }));
     }
 
@@ -738,6 +751,7 @@
           ranked.length > shown.length || st['more' + key] ? h('button', { type: 'button', class: 'chip ghost', onclick: () => { st['more' + key] = !st['more' + key]; refresh(); } }, st['more' + key] ? 'たたむ' : 'ほか ' + (ranked.length - shown.length) + '件') : null));
     };
     if (st.type === '支出') wrap.appendChild(chooser('支払い', st.from, m.wallets, (v) => { st.from = v; }, 'F'));
+    if (st.type === '支出' && st.cur !== 'USD' && m.w[st.from] && m.w[st.from].kind === '電子マネー') wrap.appendChild(chargeBlock(m));
     if (st.type === '収入') wrap.appendChild(chooser('入金先（カードへの返金はカードを選ぶ）', st.to, m.accounts.concat(m.cards), (v) => { st.to = v; }, 'T'));
     if (st.type === '振替') {
       wrap.appendChild(chooser('移す元（カードでのチャージもここ）', st.from, m.wallets, (v) => { st.from = v; }, 'F'));
@@ -775,6 +789,65 @@
       onclick: () => onKey(k), oncontextmenu: (e) => { if (k === 'del') { e.preventDefault(); onKey('clr'); } } }, k === 'del' ? '⌫' : k)));
   }
 
+  /* ---------- チャージして払う（ナナコなど電子マネー） ---------- */
+  // 「チャージ元 → 電子マネー」の振替と「電子マネーからの支払い」を1回の入力で作る。電子マネーの残りも出す
+  const chargeKey = (walletId) => walletId + '|' + (S.user || (cfg && cfg.n) || '');
+  function chargeSource(m) {
+    const k = chargeKey(st.from), me = S.user || (cfg && cfg.n) || '';
+    const list = m.wallets.filter((w) => E.isAccount(w) && w.id !== st.from && w.kind !== '電子マネー');
+    const saved = prefs.charge[k] && prefs.charge[k].from;
+    if (st.chargeFrom && list.some((w) => w.id === st.chargeFrom)) return st.chargeFrom;
+    if (saved && list.some((w) => w.id === saved)) return saved;
+    const cash = list.filter((w) => w.kind === '現金');
+    return ((cash.find((w) => me && w.name.indexOf(me) >= 0) || cash[0] || list[0]) || {}).id || '';
+  }
+  function chargeDefault(m) {
+    const b = E.balances(m)[st.from];
+    const have = b && !b.noOpening ? Math.max(0, b.balance) : 0;
+    const need = Math.max(0, (Number(st.amount) || 0) - have);
+    return need ? Math.ceil(need / 1000) * 1000 : 1000;
+  }
+  function chargeBlock(m) {
+    const w = m.w[st.from];
+    // 支払いの電子マネーが変わったら、その電子マネーで前に使った設定（チャージして払う・チャージ元）にする
+    if (st._chargeFor !== st.from) { const pf = prefs.charge[chargeKey(st.from)]; st.charge = !!(pf && pf.on); st.chargeEdited = false; st.chargeFrom = ''; st._chargeFor = st.from; }
+    const box = h('div', { class: 'charge-box' + (st.charge ? ' on' : '') });
+    const line = h('div', { class: 'charge-line' });
+    const draw = () => {
+      clear(line);
+      const b = E.balances(m)[st.from];
+      const have = b && !b.noOpening ? b.balance : null;
+      const c = st.charge ? (Number(String(st.chargeAmt).replace(/[,円\s]/g, '')) || 0) : 0, pay = Number(st.amount) || 0;
+      if (have === null) { line.appendChild(h('span', { class: 'note warn' }, w.name + 'の残高が未入力です（管理 > 開始残高）。残りは計算できませんが、記録はできます。')); return; }
+      const after = have + c - pay;
+      line.appendChild(h('div', { class: 'charge-calc' + (after < 0 ? ' neg' : '') },
+        h('span', null, w.name + ' ' + yen(have)), st.charge ? h('span', null, '＋チャージ ' + yen(c)) : null, h('span', null, '−支払い ' + yen(pay)), h('strong', null, '＝残り ' + yen(after))));
+      if (after < 0) line.appendChild(h('div', { class: 'note warn' }, '残高が足りません。' + (st.charge ? 'チャージ額を増やしてください。' : '「チャージして払う」を使ってください。')));
+    };
+    st._chargeDraw = () => { if (st.charge && !st.chargeEdited && inp) { st.chargeAmt = String(chargeDefault(m)); inp.value = Number(st.chargeAmt).toLocaleString('ja-JP'); } draw(); };
+    let inp = null;
+    box.appendChild(h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.charge, onchange: (e) => {
+      st.charge = e.target.checked; st.chargeEdited = false;
+      const k = chargeKey(st.from); prefs.charge[k] = Object.assign({}, prefs.charge[k], { on: st.charge }); savePrefs();
+      refresh();
+    } }), h('span', null, '⚡ チャージして払う（' + w.name + 'にチャージしてから支払い）')));
+    if (st.charge) {
+      if (!st.chargeEdited) st.chargeAmt = String(chargeDefault(m));
+      const src = chargeSource(m);
+      st.chargeFrom = src;
+      const sel = walletSelect(m.wallets.filter((x) => E.isAccount(x) && x.id !== st.from && x.kind !== '電子マネー'), src);
+      sel.addEventListener('change', (e) => { st.chargeFrom = e.target.value; const k = chargeKey(st.from); prefs.charge[k] = Object.assign({}, prefs.charge[k], { from: st.chargeFrom }); savePrefs(); });
+      inp = h('input', { type: 'text', inputmode: 'numeric', class: 'mini-amt', value: Number(st.chargeAmt || 0).toLocaleString('ja-JP'), 'aria-label': 'チャージ額',
+        oninput: (e) => { st.chargeAmt = e.target.value; st.chargeEdited = true; draw(); } });
+      box.appendChild(h('div', { class: 'charge-row' }, h('span', { class: 'flabel inline' }, 'チャージ元'), sel));
+      box.appendChild(h('div', { class: 'charge-row' }, h('span', { class: 'flabel inline' }, 'チャージ額'), inp, h('span', null, '円'),
+        h('span', { class: 'chips' }, [1000, 3000, 5000, 10000].map((v) => h('button', { type: 'button', class: 'chip', onclick: () => { st.chargeAmt = String(v); st.chargeEdited = true; inp.value = v.toLocaleString('ja-JP'); draw(); } }, (v / 1000) + '千')))));
+    }
+    box.appendChild(line);
+    draw();
+    return box;
+  }
+
   function saveInput(fromGuard) {
     const m = model();
     const isUsd = st.cur === 'USD';
@@ -791,12 +864,26 @@
       cur: isUsd ? 'USD' : '', famt: isUsd ? famt : '', fx: isUsd ? r : '', fxAt: isUsd ? (st.fxManual ? '手入力' : (FX.usd && FX.usd.at) || '') : '' };
     const c = catOf(t.category);
     if (st.type === '支出' && c && c.group === '立替（あとで戻る）') t.settle = '未精算';
-    try { put('tx', t); } catch (e) { toast(e.message, { error: true }); return false; }
+    // チャージして払う：先にチャージ（振替）を作る
+    let ch = null;
+    const ew = m.w[t.from];
+    if (st.type === '支出' && !isUsd && st.charge && ew && ew.kind === '電子マネー') {
+      const ca = Number(String(st.chargeAmt).replace(/[,円\s]/g, '')) || 0;
+      const src = chargeSource(m);
+      if (!(ca > 0)) { toast('チャージ額を入れてください', { error: true }); return false; }
+      if (!src) { toast('チャージ元を選んでください', { error: true }); return false; }
+      ch = { id: rid('t'), date: t.date, type: '振替', amount: ca, category: '', from: src, to: ew.id, memo: 'チャージ（' + ew.name + '）', user: t.user, settle: '', ref: '', created: t.created };
+      const k = chargeKey(ew.id); prefs.charge[k] = Object.assign({}, prefs.charge[k], { on: true, from: src });
+    }
+    try { if (ch) put('tx', ch); put('tx', t); } catch (e) { if (ch) del('tx', ch.id); toast(e.message, { error: true }); return false; }
     if (st.type === '支出') { prefs.walletByCat[t.category] = t.from; prefs.lastFrom = t.from; }
     if (st.type === '収入') prefs.lastIncomeTo = t.to;
     savePrefs();
-    st.amount = ''; st.usd = ''; st.memo = '';
-    toast((c ? c.name + ' ' : '') + (isUsd ? E.usd(famt) + '（' + yen(amount) + '）' : yen(amount)) + ' を登録しました', { undo: () => { del('tx', t.id); toast('取り消しました'); } });
+    st.amount = ''; st.usd = ''; st.memo = ''; st.chargeEdited = false;
+    let left = '';
+    if (ch) { const b = E.balances(model())[ew.id]; if (b && !b.noOpening) left = '（' + ew.name + 'の残り ' + yen(b.balance) + '）'; }
+    toast((ch ? ew.name + 'に' + yen(ch.amount) + 'チャージして、' : '') + (c ? c.name + ' ' : '') + (isUsd ? E.usd(famt) + '（' + yen(amount) + '）' : yen(amount)) + ' を登録しました' + left,
+      { undo: () => { del('tx', t.id); if (ch) del('tx', ch.id); toast('取り消しました'); } });
     if (!fromGuard) {
       if (UI.afterSave === 'home') go('home'); else refresh();
     }
