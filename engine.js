@@ -504,17 +504,19 @@ var Engine = (function () {
     return Object.keys(cands).map((k) => cands[k]).sort((a, b) => b.score - a.score || b.value - a.value).slice(0, 6);
   }
   // 品目の行ではないもの（店の案内・支払い・税の内訳など）
-  const SKIP = /(合計|小計|総計|お買上|お買い上げ|お預|預り|預かり|釣|おつり|お釣|消費税|税額|税抜|税込|内税|外税|課税|税率\s*\d|\d+(?:\.\d)?%\s*対象|対象額|対象割引|[都道府県].*[市区町村郡]|[市区町村].*\d+-\d+|ポイント|点数|クレジット|電子マネー|PayPay|nanaco|WAON|Suica|残高|支払|現金|領収|レジ|担当|TEL|電話|☎|No[.\-:：]|伝票|会員|ありがとう|株式会社|〒|登録番号|値引前|お取替|返品|保管|募集|アプリ|検索|通販|ご案内|発行者|取引|店内|持帰|テイクアウト|^[-=*_~\s]+$)/i;
+  const SKIP = /(まとめ売り\s*\d+\s*個以上|\d+\s*個以上\s*1\s*個|合計|小計|総計|お買上|お買い上げ|お預|預り|預かり|釣|おつり|お釣|消費税|税額|税抜|税込|内税|外税|課税|税率\s*\d|\d+(?:\.\d)?%\s*対象|対象額|対象割引|[都道府県].*[市区町村郡]|[市区町村].*\d+-\d+|ポイント|点数|クレジット|電子マネー|PayPay|nanaco|WAON|Suica|残高|支払|現金|領収|レジ(?!袋)|担当|TEL|電話|☎|No[.\-:：]|伝票|会員|ありがとう|株式会社|〒|登録番号|値引前|お取替|返品|保管|募集|アプリ|検索|通販|ご案内|発行者|取引|店内|持帰|テイクアウト|^[-=*_~\s]+$)/i;
   // 「品名 … 金額」の金額の部分。金額の前の「*」「※」（軽減税率の印）や、後ろの「※」「外」「J」などの印も受け付ける
   const PRICE = /[*※＊]?\s*(-?\s*¥?\s*\d{1,3}(?:,\d{3})+|-?\s*¥?\s*\d{1,6})\s*円?\s*([※*＊軽外内JＪ]|\(軽\)|\(8%\)|\(10%\))?\s*$/;
   // 数量の行：「(¥154 X 3個)」「(@100 × 2個)」「(2個¥100 × 1組)」「¥130 2個 ¥260」
   const QTY = /^[(（]?\s*(?:\d+\s*個\s*)?[¥@]?\s*[\d,]+\s*(?:[xX×*]\s*\d+\s*(?:個|点|コ|本|組|袋|枚)?|\s+\d+\s*(?:個|点|コ|本|組|袋|枚))\s*[)）]?(?:\s*¥?\s*([\d,]+))?\s*$/;
+  // 数量が先に来る行：「2コX単118 ¥236」「2個×@118 236」「3点 x 単価100 ¥300」
+  const QTY2 = /^[(（]?\s*\d+\s*(?:個|コ|ｺ|点|本|袋|枚|ケ|組)\s*[xX×*]\s*(?:単価?|@|¥)?\s*[\d,]+\s*円?\s*[)）]?(?:\s*¥?\s*([\d,]+))?\s*$/;
   // 売り場・部門の番号（「551+」「#010」「100E」など）
-  const DEPT = /^([#＃])?\s*\d{2,4}(?:[+＋]\s*|[EＥ]\s+|\s+)/;
+  const DEPT = /^([#＃])?\s*\d{2,4}(?:[+＋]\s*|[EＥ]\s+|[※*＊]\s*|\s+)/;
   const REDUCED = /([※*＊]|\(軽|（軽|\(8%\)|軽減)/;
   // 品目ではない行：電話番号・店名・住所・登録番号・レシート番号など（読み違いも含めて広く見る）
   const PHONE = /(?:^|[^\d])\(?0\d{1,4}\)?\s*[-‐ー－−~〜.\s]\s*\d{1,4}\s*[-‐ー－−~〜.\s]\s*\d{3,4}(?!\d)/;
-  const NOT_ITEM = /(TEL|Te[l1]|ＴＥＬ|℡|☎|☏|電話|FAX|ファックス|フリーダイヤル|お問い?合わせ|店\s*$|店\s*[:：(（No№#]|店舗|本店|支店|営業所|〒|丁目|\d+-\d+-\d+|番地|[都道府県].*[市区町村]|[市区町村郡].*\d|T\d{13}|登録番号|事業者|No[.\-:：]|№|レシート|伝票|取引|担当|責[:：]|レジ|POS|会員|カード番号|残高|ポイント|有効期限|URL|www\.|https?:|\.co|\.jp|@)/i;
+  const NOT_ITEM = /(TEL|Te[l1]|ＴＥＬ|℡|☎|☏|電話|FAX|ファックス|フリーダイヤル|お問い?合わせ|店\s*$|店\s*[:：(（No№#]|店舗|本店|支店|営業所|〒|丁目|\d+-\d+-\d+|番地|[都道府県].*[市区町村]|[市区町村郡].*\d|T\d{13}|登録番号|事業者|No[.\-:：]|№|レシート|伝票|取引|担当|責[:：]|レジ(?!袋)|POS|会員|カード番号|残高|ポイント|有効期限|URL|www\.|https?:|\.co|\.jp|@)/i;
   const notItem = (l, store) => PHONE.test(l) || NOT_ITEM.test(l) || /\d{7,}/.test(l.replace(/[,\s]/g, '')) ||
     (store && store.split(/\s+/).some((w) => w.length >= 3 && l.indexOf(w) >= 0));
 
@@ -554,9 +556,19 @@ var Engine = (function () {
     const unpaired = [], priceOnly = [];
     let afterTotal = false, pending = null, nameRun = 0, nextReduced = false, body = !out.date;
     const push = (name, price, reduced) => {
-      name = name.replace(/[¥*※＊\s]+$/, '').replace(/^[*※＊☆★\s]+/, '').trim().slice(0, 40);
+      name = name.replace(/\s*[*※＊]?\s*[@¥]?\d[\d,]*\s*[(（]\s*\d+\s*(?:コ|個|点|本)\s*[)）]\s*$/, '')   // 「* 570 (2コ)」単価と個数
+        .replace(/\s*[(（]\s*\d+\s*(?:コ|個|点|本)\s*[)）]\s*$/, '')                                     // 「(2コ)」
+        .replace(/\s+特$/, '')                                                                              // ドラッグストアの「特」（特価）の印
+        .replace(/[¥*※＊\s]+$/, '').replace(/^[*※＊☆★\s]+/, '').trim();
+      if (/^[(（][^)）]*$/.test(name)) name = name.slice(1);                       // 閉じかっこのない「(」
+      else if (/^[(（].*[)）]$/.test(name) && !/[(（]/.test(name.slice(1, -1))) name = name.slice(1, -1);   // 全体を囲む「( )」
+      name = name.trim().slice(0, 40);
       if (!name || name.replace(/[\d\s.,%¥()（）@×xX-]/g, '').length < 1 || !price || Math.abs(price) >= 1000000) return false;
-      out.items.push({ name: name, price: price, reduced: !!reduced });
+      // 品名の頭の英字1文字（「Aにんじん」の A）は、まとめ買い・ミックスマッチの組の印かもしれないので覚えておく
+      const gm = /^([A-ZＡ-Ｚ])\s*(?=[ぁ-んァ-ヶ一-龥ｦ-ﾟ])/.exec(name);
+      const grp = gm ? gm[1].replace(/[Ａ-Ｚ]/, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)) : '';
+      // （名前から外すのは、同じ印の「まとめ値引」が見つかったときだけ。「Pキュア…」のような品名はそのまま）
+      out.items.push({ name: name, price: price, reduced: !!reduced, grp: grp || undefined });
       if (reduced) out.hasReduced = true;
       return true;
     };
@@ -565,6 +577,23 @@ var Engine = (function () {
     // 金額のない「20%」だけの値引き行は、直前の品目の値段から計算する
     const applyDisc = (list, n, price) => {
       if (!list.length) return;
+      // 「Aまとめ値引」：同じ印（A）の品目に、値段の割合で分けて引く（1円未満は大きい品目に寄せる）
+      const gm = /^\s*([A-ZＡ-Ｚ])\s*(?:まとめ|ミックス|ﾐｯｸｽ|MM|セット|よりどり|組)/i.exec(n);
+      if (gm && price) {
+        const g = gm[1].replace(/[Ａ-Ｚ]/, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).toUpperCase();
+        const grp = list.filter((it) => it.grp === g && it.price > 0);
+        const sum = grp.reduce((a, it) => a + it.price, 0);
+        if (grp.length && sum > 0) {
+          const d = Math.abs(price);
+          let used = 0;
+          grp.slice().sort((a, b) => b.price - a.price).forEach((it, i, arr) => {
+            const part = i === arr.length - 1 ? d - used : Math.round(d * it.price / sum);
+            it.price -= part; used += part;
+            it.name = it.name.replace(/^[A-ZＡ-Ｚ]\s*/, '');   // 組の印だとわかったので、名前から外す
+          });
+          return;
+        }
+      }
       const last = list[list.length - 1];
       let d = Math.abs(price || 0);
       const pct = /(\d{1,2})\s*%/.exec(n);
@@ -572,6 +601,7 @@ var Engine = (function () {
       last.price -= d;
     };
     lines.forEach((raw) => {
+      raw = raw.replace(/^[·・･.]\s*(?=\d)/, '');   // 「·731 レジ袋L」の行頭の点
       if (/\d{1,2}:\d{2}/.test(raw) || /(20\d{2}|令和|R\d)\s*[年\/.]/.test(raw)) { pending = null; body = true; return; }   // 日付・時刻（ここから下が本文）
       if (!body) return;
       // 金額だけの行（小計より下も集める）
@@ -588,9 +618,9 @@ var Engine = (function () {
       const dOnly = /^([#＃])?\s*\d{2,4}[+＋EＥ]?$/.exec(raw);
       if (dOnly) { nextReduced = !!dOnly[1]; return; }
       // 数量の行
-      const q = QTY.exec(raw);
+      const q = QTY.exec(raw) || QTY2.exec(raw);
       if (q) {
-        if (pending && q[1]) { push(pending.name, Number(q[1].replace(/,/g, '')), pending.reduced); pending = null; }
+        if (pending && q[1]) { push(pending.name, Number(q[1].replace(/,/g, '')), pending.reduced); pending = null; nameRun = 0; }
         return;
       }
       if (SKIP.test(raw) || notItem(raw, out.store)) { pending = null; return; }
@@ -600,8 +630,10 @@ var Engine = (function () {
       const l = dept ? raw.slice(dept[0].length) : raw;
       const m = PRICE.exec(l);
       if (m) {
-        const name = l.slice(0, m.index).trim();
-        const price = Number(m[1].replace(/[\s¥,]/g, ''));
+        let name = l.slice(0, m.index).trim();
+        let price = Number(m[1].replace(/[\s¥,]/g, ''));
+        // 「スタイルフリ-- ¥1,238」のように、品名の最後の「-」が金額の前にくっついているときは、マイナスではない
+        if (price < 0 && m.index > 0 && /[^\s▲△]$/.test(l.slice(0, m.index + m[0].indexOf('-')))) { price = -price; name = (name + '-').trim(); }
         if (isDisc(name, price)) { applyDisc(out.items, name, price); pending = null; return; }   // 値引きは直前の品目から引く
         if (name && push(name, price, reduced)) { pending = null; nameRun = 0; return; }
       }
@@ -659,8 +691,8 @@ var Engine = (function () {
       if (!r || /割引/.test(l)) return;
       const v = lastNum(l);
       if (v === null) return;
-      if (/税抜/.test(l) && /対象/.test(l)) base[r] = v;
-      else if (/(税額|消費税)/.test(l) && !/対象/.test(l)) tax[r] = v;
+      if (/(税抜|外税)/.test(l) && /対象/.test(l)) base[r] = v;
+      else if (/(税額|消費税|外税)/.test(l) && !/対象/.test(l)) tax[r] = v;
       else if (/対象/.test(l)) rate[r] = v;
     });
     [8, 10].forEach((r) => { if (base[r] !== null) rate[r] = base[r] + (tax[r] || 0); });

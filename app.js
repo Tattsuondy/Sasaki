@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v3-2026-11-28b';
-  const VERSION_LABEL = 'V.611280830';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v3-2026-11-28e';
+  const VERSION_LABEL = 'V.611280844';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
