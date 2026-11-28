@@ -13,7 +13,7 @@ var Engine = (function () {
   'use strict';
 
   /* ================= 表の形 ================= */
-  const WHO = ['夫', '妻'];
+  const WHO = ['夫', '妻', 'PC'];   // 入力者：夫・妻・PC（家のPCで入れた記録）
   const SCHEMA = {
     wallets: {
       sheet: '口座・カード', label: '口座・カード', prefix: 'w',

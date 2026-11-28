@@ -7,8 +7,8 @@
 (() => {
   'use strict';
   const E = window.Engine;
-  const APP_VERSION = 'v3-2026-11-28f';
-  const VERSION_LABEL = 'V.611280849';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
+  const APP_VERSION = 'v3-2026-11-28g';
+  const VERSION_LABEL = 'V.611280901';   // 画面の版（V.6 ＋ 月日時分）。更新するたびに書き換える
 
   /* ================= 小さな道具 ================= */
   const $ = (s) => document.querySelector(s);
@@ -1153,7 +1153,7 @@
       const d2 = h('input', { type: 'date', value: SUM.to, onchange: (e) => { if (e.target.value) { SUM.to = e.target.value; refresh(); } } });
       main.appendChild(h('div', { class: 'sum-dates' }, d1, h('span', null, '〜'), d2));
     }
-    main.appendChild(seg([['', 'ふたり'], ['夫', '夫の入力'], ['妻', '妻の入力']], SUM.user, (v) => { SUM.user = v; refresh(); }));
+    main.appendChild(seg([['', '全員'], ['夫', '夫'], ['妻', '妻'], ['PC', 'PC']], SUM.user, (v) => { SUM.user = v; refresh(); }));
     let [from, to] = sumRange(m);
     if (from > to) { const x = from; from = to; to = x; }
     const s2 = E.summary(m, from, to, { user: SUM.user, byItems: SUM.byItems });
@@ -1270,7 +1270,8 @@
     const mixed = list.some((t) => (t.user || '') !== u);
     return h('button', { type: 'button', class: 'who', 'aria-label': '入力者：' + (mixed ? '混在' : u || '未設定') + '（押すと切り替え）', onclick: (ev) => {
       ev.stopPropagation();
-      const next = mixed ? (S.user || '夫') : u === '夫' ? '妻' : '夫';
+      const i = E.WHO.indexOf(u);
+      const next = mixed ? (S.user || '夫') : E.WHO[(i + 1) % E.WHO.length];   // 夫 → 妻 → PC → 夫
       const before = list.map(stripMeta);
       try { before.forEach((t) => put('tx', Object.assign({}, t, { user: next }))); }
       catch (e) { toast(e.message, { error: true }); return; }
